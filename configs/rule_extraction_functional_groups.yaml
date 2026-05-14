@@ -1,0 +1,47 @@
+min_popularity: 1
+single_product_only: true
+environment_atom_count: 1
+multicenter_rules: true
+include_rings: false
+include_func_groups: true
+keep_leaving_groups: true
+keep_incoming_groups: false
+keep_reagents: false
+reactor_validation: false
+reverse_rule: true
+as_query_container: true
+func_groups_list:
+  - '[O,S;h0]=C[O,Cl,I,Br,F]'
+  - '[O,S;h0]=CN'
+  - 'S(O)(O)[Cl]'
+  - 'B(O)O'
+  - '[Si](C)(C)C'
+  - '[Si](OC)(OC)(OC)'
+  - '[N;H0;$(N-[#6]);D2]-,=[N;D2]-,=[N;D1]'
+  - 'O=C1N([Br,I,F,Cl])C(=O)CC1'
+  - 'Cc1ccc(S(=O)(=O)O)cc1'
+  - 'CC(C)(C)OC(=O)[N]'
+  - '[C;h3][C;h0]([C;h3])([C;h3])O'
+  - '[C,N]=[C,N]'
+  - '[C,N]#[C,N]'
+  - 'C=C-[A]'
+  - 'C#C-[A]'
+  - 'O=C-[A]'
+  - 'O=C([C;h3])-[A]'
+  - 'O=C([O,N])-[A]'
+  - 'ClS(Cl)=O'
+  - '[Mg,Li,Zn,Sn][Br,Cl,I,F]'
+  - 'S(O)(O)'
+  - 'N~N'
+  - '[C;a]:[N,S,O;a]'
+  - '[N,S,O;a]:[C;a]:[C;a]'
+  - '[B,C](F)(F)F'
+atom_info_retention:
+  reaction_center:
+    neighbors: true
+    implicit_hydrogens: false
+    ring_sizes: false
+  environment:
+    neighbors: false
+    implicit_hydrogens: false
+    ring_sizes: false

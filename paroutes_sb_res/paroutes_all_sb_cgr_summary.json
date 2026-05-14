@@ -1,0 +1,14 @@
+{
+  "input_json": "PaRoutes/data/all_routes.json",
+  "input_routes": 457166,
+  "unique_routes": 181776,
+  "duplicates_removed": 275390,
+  "route_cgrs": 181774,
+  "sb_cgrs": 181774,
+  "errors": 2,
+  "errors_by_stage": {
+    "extract_route_cgr": 2
+  },
+  "atom_count_mismatches": 0,
+  "atom_count_mismatch_route_ids": []
+}

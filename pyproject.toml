@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "composite-rules"
+version = "0.1.0"
+description = "Extract SynPlanner/chython composite rules from PaRoutes-style route trees."
+requires-python = ">=3.11"
+
+[project.scripts]
+classify-alchemical-rules = "composite_rules.classify_alchemical:main"
+collect-alchemical-rules = "composite_rules.alchemical:main"
+extract-composite-rules = "composite_rules.extract:main"
+unwrap-composite-rule = "composite_rules.unwrap:main"
+unwrap-alchemical-rule = "composite_rules.unwrap_alchemical:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

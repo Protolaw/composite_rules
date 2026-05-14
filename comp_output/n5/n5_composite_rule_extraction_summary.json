@@ -1,0 +1,28 @@
+{
+  "routes_json": "PaRoutes/data/n5-routes.json",
+  "routes_seen": 10000,
+  "routes_with_composite_rules": 7263,
+  "reactions_seen": 38483,
+  "reaction_rule_cache_hits": 2574,
+  "reaction_rule_cache_misses": 35909,
+  "skipped_reactions": 0,
+  "errors": 0,
+  "unique_composite_rules": 12228,
+  "target_molecule_occurrences": 15327,
+  "min_length": 2,
+  "max_length": 5,
+  "output_prefix": "composite_rules/output/n5",
+  "output_files": {
+    "2": "composite_rules/output/n5_t2_composite_rules.tsv",
+    "3": "composite_rules/output/n5_t3_composite_rules.tsv",
+    "4": "composite_rules/output/n5_t4_composite_rules.tsv",
+    "5": "composite_rules/output/n5_t5_composite_rules.tsv"
+  },
+  "unique_composite_rules_by_size": {
+    "2": 8771,
+    "3": 2720,
+    "4": 617,
+    "5": 120
+  },
+  "summary_file": "composite_rules/output/n5_composite_rule_extraction_summary.json"
+}

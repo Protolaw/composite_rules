@@ -1,0 +1,34 @@
+[
+  {
+    "route_id": 99,
+    "stage": "validate_sb_cgr_atom_count",
+    "target_smiles": "CCCCCCCCCCCCCCCCSCC(CBr)OC",
+    "target_atoms": 23,
+    "sb_cgr_atoms": 1,
+    "error": "SB-CGR atom count does not match target molecule atom count"
+  },
+  {
+    "route_id": 5326,
+    "stage": "validate_sb_cgr_atom_count",
+    "target_smiles": "Cc1nnc2n1-c1cc(Cl)c(Br)cc1CC2",
+    "target_atoms": 16,
+    "sb_cgr_atoms": 6,
+    "error": "SB-CGR atom count does not match target molecule atom count"
+  },
+  {
+    "route_id": 5405,
+    "stage": "validate_sb_cgr_atom_count",
+    "target_smiles": "COCCC1CNCCN1C",
+    "target_atoms": 11,
+    "sb_cgr_atoms": 1,
+    "error": "SB-CGR atom count does not match target molecule atom count"
+  },
+  {
+    "route_id": 9400,
+    "stage": "validate_sb_cgr_atom_count",
+    "target_smiles": "NC1=Nc2cc(N3CCOCC3)ccc2C2CCCC12",
+    "target_atoms": 20,
+    "sb_cgr_atoms": 1,
+    "error": "SB-CGR atom count does not match target molecule atom count"
+  }
+]

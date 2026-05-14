@@ -1,0 +1,18 @@
+[
+  {
+    "route_id": 39,
+    "stage": "validate_sb_cgr_atom_count",
+    "target_smiles": "CN(C)Cc1cncc(-c2cc3c(I)n[nH]c3cc2F)c1",
+    "target_atoms": 21,
+    "sb_cgr_atoms": 6,
+    "error": "SB-CGR atom count does not match target molecule atom count"
+  },
+  {
+    "route_id": 88,
+    "stage": "validate_sb_cgr_atom_count",
+    "target_smiles": "CCCCCCCCCCCCCCCCSCC(CBr)OC",
+    "target_atoms": 23,
+    "sb_cgr_atoms": 1,
+    "error": "SB-CGR atom count does not match target molecule atom count"
+  }
+]

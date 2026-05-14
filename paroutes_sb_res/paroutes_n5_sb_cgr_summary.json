@@ -1,0 +1,19 @@
+{
+  "input_json": "PaRoutes/data/n5-routes.json",
+  "input_routes": 10000,
+  "unique_routes": 10000,
+  "duplicates_removed": 0,
+  "route_cgrs": 10000,
+  "sb_cgrs": 10000,
+  "errors": 4,
+  "errors_by_stage": {
+    "validate_sb_cgr_atom_count": 4
+  },
+  "atom_count_mismatches": 4,
+  "atom_count_mismatch_route_ids": [
+    99,
+    5326,
+    5405,
+    9400
+  ]
+}

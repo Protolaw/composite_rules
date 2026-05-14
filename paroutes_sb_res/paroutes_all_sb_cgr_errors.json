@@ -1,0 +1,16 @@
+[
+  {
+    "route_id": 16552,
+    "stage": "extract_route_cgr",
+    "target_smiles": "Cc1ccc(-c2ccccc2-c2nnnn2[Sn](C)(C)C)cc1",
+    "error_type": "InvalidAromaticRing",
+    "error": "kekule form not found for: [8, 9, 12, 10, 11]"
+  },
+  {
+    "route_id": 95426,
+    "stage": "extract_route_cgr",
+    "target_smiles": "CC1(C)CC=C(c2cc(-c3nnnn3[Sn](C)(C)C)ccc2N)CC1",
+    "error_type": "InvalidAromaticRing",
+    "error": "kekule form not found for: [13, 14, 17, 15, 16]"
+  }
+]
