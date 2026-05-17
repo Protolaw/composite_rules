@@ -66,7 +66,25 @@ conda run -n synplan python -m alchems.cli classify-alchemical-rules \
   --output /private/tmp/n1_classified_alchemical_rules.tsv
 ```
 
-## 5. Score Overlap
+## 5. Analyze Protection Strategies
+
+```bash
+PYTHONPATH=composite_rules \
+conda run -n synplan python -m alchems.cli analyze-protection \
+  --routes-json PaRoutes/data/n1-routes.json \
+  --composite-rule-tsv composite_rules/comp_output/n1 \
+  --output-dir composite_rules/protection_out/n1 \
+  --config composite_rules/configs/protection_analysis.yaml \
+  --include-multicenter \
+  --deprotection-first \
+  --querycgr-compare \
+  --ignore-errors
+```
+
+See `analyze_protection.ipynb` for a visual single-route example and the
+pool-level summary tables.
+
+## 6. Score Overlap
 
 ```bash
 PYTHONPATH=composite_rules \

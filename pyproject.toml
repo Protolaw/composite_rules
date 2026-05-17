@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 
 [project.scripts]
 alchems = "alchems.cli:main"
+analyze-protection = "alchems.cli:analyze_protection"
 classify-alchemical-rules = "alchems.cli:classify_alchemical_rules"
 collect-alchemical-rules = "alchems.cli:extract_alchemical_rules"
 extract-composite-rules = "alchems.cli:extract_composite_rules"

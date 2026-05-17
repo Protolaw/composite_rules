@@ -1,0 +1,58 @@
+# Protection/deprotection analysis configuration.
+
+deprotection_detection:
+  brute_force_all_chython_rules: true
+  allow_multiple_matches: true
+  keep_ambiguous_matches: true
+  require_product_consistency: true
+  require_atom_mapping_consistency: true
+
+multicenter:
+  include_multicenter: true
+  deprotection_first: true
+  keep_other_centers_after_marking: true
+
+tracing:
+  direction: target_to_stock
+  terminate_at_protection_introduction: true
+  terminate_at_in_stock_protected_precursor: true
+  keep_ambiguous_traces: true
+  max_trace_depth: 50
+
+composite_rules:
+  collect_interval_single_step_rules: true
+  collect_interval_composite_rules: true
+  min_composite_size: 2
+  max_composite_size: 6
+  require_shared_reaction_center: true
+  compare_by_querycgr: true
+  cluster_querycgr_families: true
+  similarity_threshold: 0.70
+
+chemist_statistics:
+  protected_functional_group: true
+  pg_lifetime: true
+  first_reaction_after_source: true
+  last_reaction_before_deprotection: true
+  route_position: true
+  stock_vs_introduced: true
+  orthogonal_pg_intervals: true
+  distance_to_reaction_center: true
+  selective_deprotection: true
+
+outputs:
+  write_route_stats: true
+  write_events: true
+  write_interval_rules: true
+  write_pg_summary: true
+  write_rule_families: true
+  write_network_edges: true
+  write_trace_failures: true
+  write_summary_json: true
+  write_debug_json: false
+  write_debug_svg: false
+
+error_handling:
+  ignore_errors: false
+  max_errors: 100
+  write_error_log: true

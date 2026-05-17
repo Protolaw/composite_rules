@@ -159,6 +159,36 @@ conda run -n synplan python -m alchems.cli unwrap-alchemical-rule \
   --output-svg /private/tmp/alchemical_unwrapped_route.svg
 ```
 
+## Protection Analysis
+
+Protection analysis detects curated chython deprotection events in route steps,
+traces the protected atom/group backward through the mapped route reactions,
+and reports whether the protecting group was introduced during the route or
+came from an in-stock precursor.
+
+```bash
+PYTHONPATH=composite_rules \
+conda run -n synplan python -m alchems.cli analyze-protection \
+  --routes-json PaRoutes/data/n1-routes.json \
+  --composite-rule-tsv composite_rules/comp_output/n1 \
+  --output-dir composite_rules/protection_out/n1 \
+  --config composite_rules/configs/protection_analysis.yaml \
+  --include-multicenter \
+  --deprotection-first \
+  --querycgr-compare \
+  --ignore-errors
+```
+
+The command prints progress every 100 processed routes by default. If you use
+`conda run`, add `--no-capture-output` to see progress live, or run
+`python -m alchems.cli ...` directly from an activated `synplan` environment.
+
+The command writes route stats, event rows, interval composite-rule rows,
+protecting-group summaries, rule-family summaries, network edges, trace
+failures, and a JSON summary. See
+`tutorials/analyze_protection.ipynb` for a route-level walkthrough with
+`get_route_svg_from_json`.
+
 To classify alchemical rules, provide a default SynPlanner rule TSV. A rule is
 negative when its QueryCGR matches any default rule; otherwise it is positive.
 

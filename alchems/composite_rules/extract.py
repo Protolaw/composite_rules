@@ -7,6 +7,7 @@ import sys
 import traceback
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,6 +27,12 @@ from alchems.io import (
 
 
 @dataclass(frozen=True)
+class MoleculeCenterProjection:
+    molecule: Any
+    center_atoms: frozenset[int]
+
+
+@dataclass(frozen=True)
 class ReactionRuleStep:
     """A route reaction annotated with its extracted rule and reaction center."""
 
@@ -33,6 +40,8 @@ class ReactionRuleStep:
     center_atoms: frozenset[int]
     reaction_smiles: str
     target_smiles: str = ""
+    reactant_center_molecules: tuple[MoleculeCenterProjection, ...] = ()
+    product_center_molecules: tuple[MoleculeCenterProjection, ...] = ()
 
 
 @dataclass
@@ -63,19 +72,242 @@ def reaction_smiles_from_node(node: dict[str, Any]) -> str:
     return smiles
 
 
+@lru_cache(maxsize=8192)
+def parse_route_reaction(reaction_smiles: str) -> Any:
+    from chython import smiles as parse_smiles
+
+    return parse_smiles(reaction_smiles)
+
+
+def route_reaction_atom_ids(reaction: Any) -> set[int]:
+    atom_ids: set[int] = set()
+    for molecule in reaction.reactants + reaction.products + reaction.reagents:
+        atom_ids.update(int(atom_id) for atom_id in molecule)
+    return atom_ids
+
+
+def same_route_molecule(left: Any, right: Any) -> bool:
+    if left.atoms_count != right.atoms_count or left.bonds_count != right.bonds_count:
+        return False
+    try:
+        if any(True for _mapping in left.get_mapping(right)):
+            return True
+    except Exception:
+        pass
+
+    left_copy = left.copy()
+    right_copy = right.copy()
+    left_copy.canonicalize()
+    right_copy.canonicalize()
+    if left_copy == right_copy:
+        return True
+
+    left_copy = left.copy()
+    right_copy = right.copy()
+    try:
+        left_copy.clean_stereo()
+        right_copy.clean_stereo()
+    except Exception:
+        return False
+    left_copy.canonicalize()
+    right_copy.canonicalize()
+    return left_copy == right_copy
+
+
+def remap_route_molecule(molecule: Any, mapping: dict[int, int]) -> Any:
+    molecule_copy = molecule.copy()
+    molecule_mapping = {
+        atom_id: mapping[atom_id]
+        for atom_id in molecule_copy
+        if atom_id in mapping and atom_id != mapping[atom_id]
+    }
+    if molecule_mapping:
+        molecule_copy.remap(molecule_mapping)
+    return molecule_copy
+
+
+def remap_route_reaction(reaction: Any, mapping: dict[int, int]) -> Any:
+    from chython.containers import ReactionContainer
+
+    return ReactionContainer(
+        tuple(remap_route_molecule(molecule, mapping) for molecule in reaction.reactants),
+        tuple(remap_route_molecule(molecule, mapping) for molecule in reaction.products),
+        tuple(remap_route_molecule(molecule, mapping) for molecule in reaction.reagents),
+        meta=dict(getattr(reaction, "meta", {}) or {}),
+        name=getattr(reaction, "name", None),
+    )
+
+
+def molecule_node_smiles(node: dict[str, Any]) -> str:
+    metadata = node.get("metadata") or {}
+    return node.get("smiles") or metadata.get("smiles") or ""
+
+
+def set_molecule_node_mapped_smiles(node: dict[str, Any], molecule: Any) -> None:
+    metadata = node.setdefault("metadata", {})
+    metadata.setdefault("original_smiles", molecule_node_smiles(node))
+    metadata["mapped_smiles"] = format(molecule, "m")
+    node["smiles"] = metadata["mapped_smiles"]
+
+
+def find_route_side_molecule(
+    candidates: Iterable[Any],
+    reference: Any | None,
+    *,
+    fallback_smiles: str = "",
+    excluded_indexes: set[int] | None = None,
+) -> tuple[int, Any] | tuple[None, None]:
+    excluded = excluded_indexes or set()
+    reference_molecule = reference
+    if reference_molecule is None and fallback_smiles:
+        try:
+            reference_molecule = parse_route_molecule(fallback_smiles)
+        except Exception:
+            reference_molecule = None
+    if reference_molecule is None:
+        return None, None
+
+    for index, candidate in enumerate(candidates):
+        if index in excluded:
+            continue
+        try:
+            if same_route_molecule(candidate, reference_molecule):
+                return index, candidate
+        except Exception:
+            continue
+    return None, None
+
+
 def normalize_route_tree(route: dict[str, Any]) -> dict[str, Any]:
-    """Return a route copy whose reaction nodes contain mapped reaction SMILES."""
+    """Return a route copy with globally consistent atom maps.
+
+    PaRoutes stores each reaction with step-local atom maps. This normalizer
+    walks the route from the target toward stock molecules, aligns every child
+    reaction product to the mapped molecule expected by its parent reaction, and
+    assigns fresh map numbers to atoms that are newly introduced in each branch.
+    The original molecule ``smiles`` fields are preserved for display; the
+    globally mapped molecule representation is stored in ``metadata.mapped_smiles``.
+    """
 
     route = copy.deepcopy(route)
+    all_original_atom_ids: set[int] = set()
 
-    def visit(node: dict[str, Any]) -> None:
+    def collect_original_atom_ids(node: dict[str, Any]) -> None:
         if node.get("type") == "reaction":
             node["smiles"] = reaction_smiles_from_node(node)
+            try:
+                all_original_atom_ids.update(
+                    route_reaction_atom_ids(parse_route_reaction(node["smiles"]))
+                )
+            except Exception:
+                pass
         for child in node.get("children", []) or []:
             if isinstance(child, dict):
-                visit(child)
+                collect_original_atom_ids(child)
 
-    visit(route)
+    collect_original_atom_ids(route)
+    used_atom_ids: set[int] = set()
+    next_atom_id = max(all_original_atom_ids or {0}) + 1
+
+    def fresh_atom_id() -> int:
+        nonlocal next_atom_id
+        while next_atom_id in used_atom_ids:
+            next_atom_id += 1
+        atom_id = next_atom_id
+        used_atom_ids.add(atom_id)
+        next_atom_id += 1
+        return atom_id
+
+    def complete_mapping(reaction: Any, alignment: dict[int, int]) -> dict[int, int]:
+        mapping: dict[int, int] = dict(alignment)
+        for target_atom_id in alignment.values():
+            used_atom_ids.add(int(target_atom_id))
+
+        for atom_id in sorted(route_reaction_atom_ids(reaction)):
+            if atom_id in mapping:
+                continue
+            if atom_id in used_atom_ids:
+                mapping[atom_id] = fresh_atom_id()
+            else:
+                mapping[atom_id] = atom_id
+                used_atom_ids.add(atom_id)
+        return mapping
+
+    def visit_molecule(node: dict[str, Any], expected_molecule: Any | None = None) -> None:
+        if expected_molecule is not None:
+            set_molecule_node_mapped_smiles(node, expected_molecule)
+
+        for child in node.get("children", []) or []:
+            if not isinstance(child, dict) or child.get("type") != "reaction":
+                continue
+            try:
+                reaction = parse_route_reaction(reaction_smiles_from_node(child))
+            except Exception:
+                visit_reaction_children(child)
+                continue
+
+            product_index, product = find_route_side_molecule(
+                reaction.products,
+                expected_molecule,
+                fallback_smiles=molecule_node_smiles(node),
+            )
+            alignment: dict[int, int] = {}
+            if product is not None:
+                if expected_molecule is None:
+                    alignment = {int(atom_id): int(atom_id) for atom_id in product}
+                else:
+                    mappings = list(product.get_mapping(expected_molecule))
+                    if mappings:
+                        alignment = {
+                            int(source): int(target)
+                            for source, target in mappings[0].items()
+                        }
+                mapping = complete_mapping(reaction, alignment)
+                normalized_reaction = remap_route_reaction(reaction, mapping)
+                child["smiles"] = format(normalized_reaction, "m")
+                if product_index is not None:
+                    normalized_products = list(normalized_reaction.products)
+                    if product_index < len(normalized_products):
+                        set_molecule_node_mapped_smiles(
+                            node,
+                            normalized_products[product_index],
+                        )
+                visit_reaction_children(child, normalized_reaction)
+            else:
+                mapping = complete_mapping(reaction, {})
+                normalized_reaction = remap_route_reaction(reaction, mapping)
+                child["smiles"] = format(normalized_reaction, "m")
+                visit_reaction_children(child, normalized_reaction)
+
+    def visit_reaction_children(
+        reaction_node: dict[str, Any],
+        reaction: Any | None = None,
+    ) -> None:
+        if reaction is None:
+            try:
+                reaction = parse_route_reaction(reaction_smiles_from_node(reaction_node))
+            except Exception:
+                for child in reaction_node.get("children", []) or []:
+                    if isinstance(child, dict) and child.get("type") == "mol":
+                        visit_molecule(child)
+                return
+
+        used_reactant_indexes: set[int] = set()
+        reactants = list(reaction.reactants)
+        for child in reaction_node.get("children", []) or []:
+            if not isinstance(child, dict) or child.get("type") != "mol":
+                continue
+            reactant_index, reactant = find_route_side_molecule(
+                reactants,
+                None,
+                fallback_smiles=molecule_node_smiles(child),
+                excluded_indexes=used_reactant_indexes,
+            )
+            if reactant_index is not None:
+                used_reactant_indexes.add(reactant_index)
+            visit_molecule(child, reactant)
+
+    visit_molecule(route)
     return route
 
 
@@ -112,6 +344,11 @@ def root_reaction_nodes(route: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def route_target_smiles(route: dict[str, Any]) -> str:
+    metadata = route.get("metadata") or {}
+    return metadata.get("original_smiles") or route.get("smiles") or metadata.get("smiles") or ""
+
+
 def reaction_paths_from_node(
     reaction_node: dict[str, Any],
     step_by_reaction_smiles: dict[str, ReactionRuleStep],
@@ -128,8 +365,207 @@ def reaction_paths_from_node(
     return paths
 
 
+@lru_cache(maxsize=8192)
+def parse_route_molecule(molecule_smiles: str) -> Any:
+    from chython import smiles as parse_smiles
+
+    return parse_smiles(molecule_smiles)
+
+
+def side_center_molecules(
+    molecules: Iterable[Any],
+    center_atoms: frozenset[int],
+) -> tuple[MoleculeCenterProjection, ...]:
+    projections = []
+    for molecule in molecules:
+        molecule_center_atoms = center_atoms & set(molecule)
+        projections.append(
+            MoleculeCenterProjection(
+                molecule=molecule,
+                center_atoms=frozenset(molecule_center_atoms),
+            )
+        )
+    return tuple(projections)
+
+
+def project_side_centers_to_route_molecule(
+    side_molecules: tuple[MoleculeCenterProjection, ...],
+    route_molecule_smiles: str,
+) -> tuple[frozenset[int], bool]:
+    route_molecule = parse_route_molecule(route_molecule_smiles)
+    projected_center_atoms: set[int] = set()
+    matched_route_molecule = False
+
+    for side_molecule in side_molecules:
+        if side_molecule.molecule.atoms_count != route_molecule.atoms_count:
+            continue
+        for mapping in side_molecule.molecule.get_mapping(route_molecule):
+            matched_route_molecule = True
+            projected_center_atoms.update(
+                mapping[atom_id]
+                for atom_id in side_molecule.center_atoms
+                if atom_id in mapping
+            )
+
+    return frozenset(projected_center_atoms), matched_route_molecule
+
+
+def projected_center_atoms_touch(
+    route_molecule_smiles: str,
+    left_centers: frozenset[int],
+    right_centers: frozenset[int],
+) -> bool:
+    if left_centers & right_centers:
+        return True
+
+    route_molecule = parse_route_molecule(route_molecule_smiles)
+    for atom_1, atom_2, _bond in route_molecule.bonds():
+        if atom_1 in left_centers and atom_2 in right_centers and center_contact_allowed(
+            route_molecule,
+            atom_1,
+            atom_2,
+        ):
+            return True
+        if atom_2 in left_centers and atom_1 in right_centers and center_contact_allowed(
+            route_molecule,
+            atom_2,
+            atom_1,
+        ):
+            return True
+    return False
+
+
+def projected_center_components(
+    route_molecule_smiles: str,
+    center_atoms: frozenset[int],
+) -> list[frozenset[int]]:
+    route_molecule = parse_route_molecule(route_molecule_smiles)
+    remaining = set(center_atoms)
+    components: list[frozenset[int]] = []
+    adjacency: dict[int, set[int]] = {atom: set() for atom in center_atoms}
+    for atom_1, atom_2, _bond in route_molecule.bonds():
+        if atom_1 in center_atoms and atom_2 in center_atoms:
+            adjacency[atom_1].add(atom_2)
+            adjacency[atom_2].add(atom_1)
+
+    while remaining:
+        stack = [remaining.pop()]
+        component = set(stack)
+        while stack:
+            atom = stack.pop()
+            for neighbor in adjacency[atom]:
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    component.add(neighbor)
+                    stack.append(neighbor)
+        components.append(frozenset(component))
+    return components
+
+
+def touches_all_center_components(
+    route_molecule_smiles: str,
+    left_centers: frozenset[int],
+    right_centers: frozenset[int],
+) -> bool:
+    components = projected_center_components(route_molecule_smiles, right_centers)
+    if len(components) <= 1:
+        return True
+    return all(
+        projected_center_atoms_touch(route_molecule_smiles, left_centers, component)
+        for component in components
+    )
+
+
+def center_contact_allowed(route_molecule: Any, atom_1: int, atom_2: int) -> bool:
+    atomic_numbers = {
+        atom_number: atom.atomic_number for atom_number, atom in route_molecule.atoms()
+    }
+    atom_1_number = atomic_numbers.get(atom_1)
+    atom_2_number = atomic_numbers.get(atom_2)
+    if atom_1_number is None or atom_2_number is None:
+        return False
+
+    if atom_1_number != 6 or atom_2_number != 6:
+        return True
+
+    return is_carbonyl_carbon(route_molecule, atom_1) or is_carbonyl_carbon(
+        route_molecule,
+        atom_2,
+    )
+
+
+def is_carbonyl_carbon(route_molecule: Any, atom_number: int) -> bool:
+    atom = route_molecule.atom(atom_number)
+    if atom.atomic_number != 6:
+        return False
+    for neighbor_id, bond in route_molecule._bonds[atom_number].items():
+        neighbor = route_molecule.atom(neighbor_id)
+        if neighbor.atomic_number == 8 and int(bond) == 2:
+            return True
+    return False
+
+
 def adjacent_centers_overlap(left: ReactionRuleStep, right: ReactionRuleStep) -> bool:
+    if (
+        right.target_smiles
+        and left.reactant_center_molecules
+        and right.product_center_molecules
+    ):
+        left_centers, left_matched = project_side_centers_to_route_molecule(
+            left.reactant_center_molecules,
+            right.target_smiles,
+        )
+        right_centers, right_matched = project_side_centers_to_route_molecule(
+            right.product_center_molecules,
+            right.target_smiles,
+        )
+        if not (
+            left_matched
+            and right_matched
+            and touches_all_center_components(
+                right.target_smiles,
+                left_centers,
+                right_centers,
+            )
+            and projected_center_atoms_touch(
+                right.target_smiles,
+                left_centers,
+                right_centers,
+            )
+        ):
+            return False
+        return not is_excluded_adjacent_pair(left, right)
+
     return bool(left.center_atoms & right.center_atoms)
+
+
+def is_excluded_adjacent_pair(
+    left: ReactionRuleStep,
+    right: ReactionRuleStep,
+) -> bool:
+    return (
+        is_sulfonyl_ester_activation_rule(left.rule_smarts)
+        and is_alcohol_ester_deprotection_rule(right.rule_smarts)
+    )
+
+
+def is_sulfonyl_ester_activation_rule(rule_smarts: str) -> bool:
+    left, _, right = rule_smarts.partition(">>")
+    return (
+        "-[O;D2" in left
+        and "-[S;D4" in left
+        and "=[O;D1" in left
+        and "[O;D1" in right
+    )
+
+
+def is_alcohol_ester_deprotection_rule(rule_smarts: str) -> bool:
+    left, _, right = rule_smarts.partition(">>")
+    return (
+        "-[O;D1" in left
+        and "-[O;D2" in right
+        and "=[O;D1" in right
+    )
 
 
 def valid_composite_sequences(
@@ -224,6 +660,14 @@ class SynPlannerRuleExtractor:
         reaction = parse_smiles(reaction_smiles)
         standardized = self.standardizer(reaction)
         center_atoms = frozenset((~standardized).center_atoms)
+        reactant_center_molecules = side_center_molecules(
+            standardized.reactants,
+            center_atoms,
+        )
+        product_center_molecules = side_center_molecules(
+            standardized.products,
+            center_atoms,
+        )
         rules, skipped = extract_rules(self.config, reaction)
         if skipped or not rules:
             self.cache[reaction_smiles] = None
@@ -239,6 +683,8 @@ class SynPlannerRuleExtractor:
             rule_smarts=rule_smarts,
             center_atoms=center_atoms,
             reaction_smiles=reaction_smiles,
+            reactant_center_molecules=reactant_center_molecules,
+            product_center_molecules=product_center_molecules,
         )
         self.cache[reaction_smiles] = step
         return step, False
@@ -291,6 +737,8 @@ def extract_route_composites(
             center_atoms=step.center_atoms,
             reaction_smiles=step.reaction_smiles,
             target_smiles=target_smiles,
+            reactant_center_molecules=step.reactant_center_molecules,
+            product_center_molecules=step.product_center_molecules,
         )
 
     sequences: dict[tuple[str, ...], set[str]] = defaultdict(set)

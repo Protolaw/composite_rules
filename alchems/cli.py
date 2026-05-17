@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from alchems.alchemical_rules import alchemical, classify_alchemical
 from alchems.alchemical_rules import unwrap_alchemical
 from alchems.composite_rules import extract
 from alchems.composite_rules import unwrap as unwrap_composite
+from alchems.io import read_json, resolve_existing_path, setup_runtime_cache_dirs
+from alchems.protection.analysis import (
+    ProtectionAnalysisConfig,
+    analyze_protection_in_routes,
+    load_composite_rule_index,
+)
+from alchems.protection.chython_rules import load_chython_protection_rules
+from alchems.protection.outputs import (
+    dataset_prefix_from_routes_path,
+    write_protection_outputs,
+)
 from alchems.scoring import overlap
 
 
@@ -138,6 +150,111 @@ def add_scoring_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--progress-interval", type=int, default=250)
 
 
+def add_protection_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--routes-json", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--composite-rule-tsv",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Optional composite rule TSV files or directories.",
+    )
+    parser.add_argument("--alchemical-rules-tsv", type=Path, nargs="+", default=None)
+    parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument("--route-ids-file", type=Path, default=None)
+    parser.add_argument("--limit", "--max-routes", type=int, default=None)
+    parser.add_argument("--min-composite-size", type=int, default=None)
+    parser.add_argument("--max-composite-size", type=int, default=None)
+    parser.add_argument("--similarity-threshold", type=float, default=None)
+    parser.add_argument("--include-multicenter", action="store_true")
+    parser.add_argument("--deprotection-first", action="store_true")
+    parser.add_argument("--querycgr-compare", action="store_true")
+    parser.add_argument("--write-debug-json", action="store_true")
+    parser.add_argument("--write-debug-svg", action="store_true")
+    parser.add_argument("--ignore-errors", action="store_true")
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=100,
+        help="Print route-level progress every N processed routes. Use 0 to disable.",
+    )
+
+
+def read_protection_route_ids(path: Path | None) -> set[str] | None:
+    if path is None:
+        return None
+    route_ids = set()
+    with path.open(encoding="utf-8") as file:
+        for line in file:
+            value = line.strip()
+            if value:
+                route_ids.add(value)
+    return route_ids
+
+
+def run_protection_analysis(args: argparse.Namespace) -> int:
+    setup_runtime_cache_dirs()
+    routes_path = resolve_existing_path(args.routes_json)
+    config_path = resolve_existing_path(args.config) if args.config else None
+    config = ProtectionAnalysisConfig.from_yaml(config_path).with_cli_overrides(args)
+
+    print(f"[analyze-protection] loading routes: {routes_path}", file=sys.stderr, flush=True)
+    routes_json = read_json(routes_path)
+
+    print("[analyze-protection] loading composite rule index", file=sys.stderr, flush=True)
+    composite_rule_index = load_composite_rule_index(args.composite_rule_tsv)
+    print(
+        "[analyze-protection] composite rule families: "
+        f"{len(composite_rule_index)}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    print("[analyze-protection] loading chython protection rules", file=sys.stderr, flush=True)
+    protection_rules = load_chython_protection_rules()
+    source_counts: dict[str, int] = {}
+    for rule in protection_rules.values():
+        source_counts[rule.source] = source_counts.get(rule.source, 0) + 1
+    print(
+        "[analyze-protection] protection rules: "
+        f"{len(protection_rules)} from {source_counts}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    route_ids_path = (
+        resolve_existing_path(args.route_ids_file) if args.route_ids_file else None
+    )
+    result = analyze_protection_in_routes(
+        routes_json,
+        composite_rule_index=composite_rule_index,
+        config=config,
+        protection_rules=protection_rules,
+        limit=args.limit,
+        route_ids=read_protection_route_ids(route_ids_path),
+        progress_interval=args.progress_interval,
+    )
+    output_info = write_protection_outputs(
+        result,
+        args.output_dir,
+        dataset_prefix=dataset_prefix_from_routes_path(routes_path),
+    )
+    print(
+        "[analyze-protection] done: "
+        f"{result.summary['n_routes']} routes, "
+        f"{result.summary['n_deprotection_events']} deprotection events",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(
+        f"[analyze-protection] summary: {output_info['output_files']['summary']}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alchems")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -189,6 +306,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_scoring_arguments(score_parser)
     score_parser.set_defaults(func=overlap.run)
+
+    protection_parser = subparsers.add_parser(
+        "analyze-protection",
+        aliases=["analyze-protecting-groups"],
+        help="Analyze route-level protection/deprotection strategies.",
+    )
+    add_protection_arguments(protection_parser)
+    protection_parser.set_defaults(func=run_protection_analysis)
 
     return parser
 
@@ -250,6 +375,14 @@ def unwrap_alchemical_rule(argv: list[str] | None = None) -> int:
     )
     add_alchemical_unwrap_arguments(parser)
     return unwrap_alchemical.run(parser.parse_args(argv))
+
+
+def analyze_protection(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Analyze route-level protection/deprotection strategies."
+    )
+    add_protection_arguments(parser)
+    return run_protection_analysis(parser.parse_args(argv))
 
 
 if __name__ == "__main__":

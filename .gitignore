@@ -2,3 +2,4 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 output/
+protection_strategy_agent_package/
