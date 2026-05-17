@@ -9,8 +9,11 @@ reaction pair shares at least one reaction-center atom. For a valid ordered
 chain `t1, t2, t3`, the output includes `t1$t2`, `t2$t3`, and `t1$t2$t3`, but
 does not include the non-contiguous `t1$t3`.
 
-Reaction-center sharing is computed as a non-empty intersection between the
-adjacent standardized SynPlanner/chython reaction CGR `center_atoms` sets.
+Reaction-center sharing is computed on the shared route molecule between two
+adjacent reactions. The extractor projects the parent reaction center from the
+parent reactant side and the child reaction center from the child product side
+onto that shared molecule, then checks for overlapping centers or constrained
+functional-group center shifts.
 
 ## Output
 
@@ -41,6 +44,21 @@ A JSON summary is also written:
 ```text
 n1_composite_rule_extraction_summary.json
 ```
+
+Routes that are processed successfully but do not yield any composite rules are
+written to:
+
+```text
+n1_routes_without_composite_rules.json
+```
+
+This file is a JSON route lookup, `{route_id: route_tree}`, so it can be used
+directly with `get_route_svg_from_json`. Each route root also gets
+`metadata.composite_rule_extraction` with the target SMILES, per-route reaction
+counts, and a coarse reason such as `no_reactions`,
+`fewer_than_min_length_extracted_reactions`, or
+`no_reaction_center_sharing_sequence`. Use
+`--routes-without-composites-output` to choose a different path.
 
 ## Usage
 
@@ -136,11 +154,18 @@ directory is given, the collector writes `<prefix>_alchemical_rules.tsv`,
 `<prefix>_alchemical_reactions.smi`, and the summary/error sidecars there.
 Shell line continuations must be a final `\` character with no trailing space.
 
+Alchemical rule duplicates are merged by comparing the composed QueryCGR
+objects, not by raw SMARTS strings. This avoids splitting equivalent rules only
+because their atom-map numbers render differently. Skipped unwrap applications
+are written to the error sidecar with a compact schema: `row_index`,
+`Target_smiles`, `Composite_rule`, `source_tsv`, `Composite_size`, and
+`Route_ids`.
+
 The alchemical TSV links each alchemical rule back to the composite rules that
 generated it:
 
 ```text
-Alchemical_rule	popularity	route_ids_size	Reference	Target_molecules	composite_rules_size	Composite_rule_sizes	Composite_rules	Source_composite_rows	pseudo_reactions_size	Pseudo_reaction_ids	Alchemical_cgr
+Alchemical_rule	output_reactants_num	popularity	route_ids_size	Reference	Target_molecules	composite_rules_size	Composite_rule_sizes	Composite_rules	Source_composite_rows	pseudo_reactions_size	Pseudo_reaction_ids
 ```
 
 The `.smi` file contains mapped pseudo-reactions in the first column, followed
@@ -204,6 +229,12 @@ conda run -n synplan python -m alchems.cli classify-alchemical-rules \
 
 The scoring CLI measures order-sensitive overlap between extracted composite
 rule TSV files and composite rules extracted from a reference route JSON.
+This follows the same high-level idea as Retro-BLEU: extract ordered adjacent
+route fragments, convert reactions into reusable rule/template identifiers, and
+score how many extracted fragments occur in a reference vocabulary. The main
+differences are that this project uses SynPlanner/chython rule SMARTS instead
+of RDKit/AiZynthFinder templates, keeps only reaction-center-sharing fragments,
+and reads the reference directly from route JSON instead of a precomputed pickle.
 
 ```bash
 PYTHONPATH=composite_rules \
@@ -212,3 +243,22 @@ conda run -n synplan python -m alchems.cli score-composite-overlap \
   --reference-routes-json PaRoutes/data/n1-routes.json \
   --output /private/tmp/composite_rule_scores
 ```
+
+If you provide classified alchemical rules, the scorer also reports
+classification-aware overlap:
+
+```bash
+PYTHONPATH=composite_rules \
+conda run -n synplan python -m alchems.cli score-composite-overlap \
+  --extracted-tsv composite_rules/comp_output/n1 \
+  --reference-routes-json PaRoutes/data/n1-routes.json \
+  --classification-tsv composite_rules/reference/n1_classified_alchemical_rules.tsv \
+  --output /private/tmp/composite_rule_scores
+```
+
+`pos_overlap` is the extracted-popularity-weighted overlap assigned to positive
+classified alchemical rules. `neg_overlap` is the same quantity assigned to
+negative classified alchemical rules. For a composite rule linked to both
+positive and negative alchemical rows, its contribution is split by the
+positive/negative classification weights from the classified alchemical TSV.
+Use `pos_overlap` as a reward term and `neg_overlap` as a penalty term.

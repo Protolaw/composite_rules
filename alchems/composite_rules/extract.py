@@ -21,6 +21,7 @@ from alchems.io import (
     resolve_existing_path,
     setup_runtime_cache_dirs,
     write_composite_errors as write_errors,
+    write_composite_routes_without_rules,
     write_composite_rules,
     write_composite_summary as write_summary,
 )
@@ -616,6 +617,50 @@ def valid_composite_sequence_occurrences(
     yield from emit_segment(segment)
 
 
+@lru_cache(maxsize=32768)
+def rule_querycgr_identity(rule_smarts: str) -> str:
+    try:
+        from alchems.alchemical_rules.alchemical import (
+            query_cgr_coarse_signature,
+            rule_query_cgr,
+        )
+
+        signature = query_cgr_coarse_signature(rule_query_cgr(rule_smarts))
+        return json.dumps(signature, sort_keys=True, default=repr)
+    except Exception:
+        return rule_smarts
+
+
+def composite_sequence_identity(sequence: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(rule_querycgr_identity(rule_smarts) for rule_smarts in sequence)
+
+
+def merge_composite_sequences_by_querycgr(
+    references_by_sequence: dict[tuple[str, ...], set[Any]],
+    target_molecules_by_sequence: dict[tuple[str, ...], dict[Any, set[str]]],
+) -> tuple[
+    dict[tuple[str, ...], set[Any]],
+    dict[tuple[str, ...], dict[Any, set[str]]],
+]:
+    representative_by_identity: dict[tuple[str, ...], tuple[str, ...]] = {}
+    references_out: dict[tuple[str, ...], set[Any]] = defaultdict(set)
+    targets_out: dict[tuple[str, ...], dict[Any, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+
+    for sequence in sorted(references_by_sequence, key=lambda item: "$".join(item)):
+        identity = composite_sequence_identity(sequence)
+        representative = representative_by_identity.setdefault(identity, sequence)
+        references_out[representative].update(references_by_sequence[sequence])
+        for route_id, target_molecules in target_molecules_by_sequence.get(
+            sequence,
+            {},
+        ).items():
+            targets_out[representative][route_id].update(target_molecules)
+
+    return references_out, targets_out
+
+
 class SynPlannerRuleExtractor:
     def __init__(self, config: Any):
         from synplan.chem.data.standardizing import RemoveReagentsStandardizer
@@ -757,6 +802,22 @@ def extract_route_composites(
     return sequences
 
 
+def no_composite_reason(
+    *,
+    reactions_seen: int,
+    extracted_reaction_rules: int,
+    skipped_reactions: int,
+    min_length: int,
+) -> str:
+    if reactions_seen == 0:
+        return "no_reactions"
+    if extracted_reaction_rules == 0 and skipped_reactions:
+        return "all_reactions_skipped"
+    if extracted_reaction_rules < min_length:
+        return "fewer_than_min_length_extracted_reactions"
+    return "no_reaction_center_sharing_sequence"
+
+
 def run(args: argparse.Namespace) -> int:
     setup_runtime_cache_dirs()
     if args.min_length < 2:
@@ -775,12 +836,16 @@ def run(args: argparse.Namespace) -> int:
         defaultdict(lambda: defaultdict(set))
     )
     errors: list[dict[str, Any]] = []
+    routes_without_composites: dict[Any, dict[str, Any]] = {}
+    routes_without_composites_by_reason: dict[str, int] = defaultdict(int)
     stats = RouteProcessingStats()
 
     for index, (route_id, route) in enumerate(route_items(routes_json), start=1):
         if args.limit is not None and index > args.limit:
             break
         stats.routes_seen += 1
+        reactions_before = stats.reactions_seen
+        skipped_before = stats.skipped_reactions
         try:
             route_sequences = extract_route_composites(
                 route,
@@ -791,6 +856,30 @@ def run(args: argparse.Namespace) -> int:
             )
             if route_sequences:
                 stats.routes_with_composites += 1
+            else:
+                route_reactions_seen = stats.reactions_seen - reactions_before
+                route_skipped_reactions = stats.skipped_reactions - skipped_before
+                extracted_reaction_rules = (
+                    route_reactions_seen - route_skipped_reactions
+                )
+                reason = no_composite_reason(
+                    reactions_seen=route_reactions_seen,
+                    extracted_reaction_rules=extracted_reaction_rules,
+                    skipped_reactions=route_skipped_reactions,
+                    min_length=args.min_length,
+                )
+                routes_without_composites_by_reason[reason] += 1
+                route_for_output = copy.deepcopy(route)
+                metadata = route_for_output.setdefault("metadata", {})
+                metadata["composite_rule_extraction"] = {
+                    "route_id": route_id,
+                    "target_smiles": route_target_smiles(route),
+                    "reactions_seen": route_reactions_seen,
+                    "extracted_reaction_rules": extracted_reaction_rules,
+                    "skipped_reactions": route_skipped_reactions,
+                    "reason": reason,
+                }
+                routes_without_composites[route_id] = route_for_output
             for sequence, target_molecules in route_sequences.items():
                 references_by_sequence[sequence].add(route_id)
                 target_molecules_by_sequence[sequence][route_id].update(
@@ -812,30 +901,49 @@ def run(args: argparse.Namespace) -> int:
         if args.progress_interval and index % args.progress_interval == 0:
             print(
                 f"processed routes={index} composite_rules={len(references_by_sequence)} "
+                f"routes_without_composites={len(routes_without_composites)} "
                 f"errors={stats.errors}",
                 flush=True,
             )
 
+    references_for_output, target_molecules_for_output = (
+        merge_composite_sequences_by_querycgr(
+            references_by_sequence,
+            target_molecules_by_sequence,
+        )
+    )
+
     output_summary = write_composite_rules(
         args.output,
-        references_by_sequence,
-        target_molecules_by_sequence=target_molecules_by_sequence,
+        references_for_output,
+        target_molecules_by_sequence=target_molecules_for_output,
     )
     write_errors(args.output, errors)
+    routes_without_composites_path = write_composite_routes_without_rules(
+        args.output,
+        routes_without_composites,
+        getattr(args, "routes_without_composites_output", None),
+    )
 
     summary = {
         "routes_json": str(args.routes_json),
         "routes_seen": stats.routes_seen,
         "routes_with_composite_rules": stats.routes_with_composites,
+        "routes_without_composite_rules": len(routes_without_composites),
+        "routes_without_composite_rules_file": str(routes_without_composites_path),
+        "routes_without_composite_rules_by_reason": dict(
+            sorted(routes_without_composites_by_reason.items())
+        ),
         "reactions_seen": stats.reactions_seen,
         "reaction_rule_cache_hits": stats.reaction_rule_cache_hits,
         "reaction_rule_cache_misses": stats.reaction_rule_cache_misses,
         "skipped_reactions": stats.skipped_reactions,
         "errors": stats.errors,
-        "unique_composite_rules": len(references_by_sequence),
+        "unique_composite_rules": len(references_for_output),
+        "raw_composite_rule_sequences": len(references_by_sequence),
         "target_molecule_occurrences": sum(
             len(targets)
-            for route_targets in target_molecules_by_sequence.values()
+            for route_targets in target_molecules_for_output.values()
             for targets in route_targets.values()
         ),
         "min_length": args.min_length,

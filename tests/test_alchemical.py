@@ -2,13 +2,18 @@ import csv
 
 from alchems.alchemical_rules.alchemical import (
     AlchemicalRuleAggregate,
+    ExtractedAlchemicalRule,
     PseudoReactionRecord,
+    collect_alchemical_rules,
     compose_pseudo_reaction_smiles,
     normalize_pseudo_reaction_mapping,
+    query_cgr_isomorphic,
     rule_cgr_key,
+    rule_query_cgr,
 )
 from alchems.io import (
     expand_composite_rule_tsv_paths,
+    reaction_output_reactants_num,
     resolve_alchemical_output_paths,
     write_alchemical_errors,
     write_alchemical_rules_tsv,
@@ -41,7 +46,39 @@ def test_normalize_pseudo_reaction_mapping_remaps_generated_collisions():
 
 
 def test_rule_cgr_key_uses_query_cgr_identity():
-    assert rule_cgr_key("[C:1]-[O:2]>>[C:1].[O:2]") == "[C][->.][O]"
+    assert rule_cgr_key("[C:1]-[O:2]>>[C:1].[O:2]") == rule_cgr_key(
+        "[C:7]-[O:9]>>[C:7].[O:9]"
+    )
+
+
+def test_reaction_output_reactants_num_counts_rule_products():
+    assert (
+        reaction_output_reactants_num(
+            "[C;D3:1]-[C;D3:2](=[O;D1:3])-[N;D2:4]-[C;D3:5]"
+            ">>"
+            "[C;D3:1]-[C;D3:2](=[O;D1:3])-[O;D2:6]-[C;D1:7]."
+            "[N;D1:4]-[C;D3:5]"
+        )
+        == 2
+    )
+    assert (
+        reaction_output_reactants_num(
+            "[Si;D4:1]-[C;D3:2]:1:[C;D2:3]:[N;D3:4](-[C;D3:5]):"
+            "[N;D2:6]:[N;D2:7]:1"
+            ">>"
+            "[Si;D4:1]-[C;D2:2]#[C;D1:3]."
+            "[N;D2+:6](=[N;D1-:7])=[N;D1-:8]."
+            "[N;D1:4]-[C;D3:5]"
+        )
+        == 3
+    )
+
+
+def test_query_cgr_isomorphic_ignores_rule_atom_map_numbering():
+    left = rule_query_cgr("[C:1]-[O:2]>>[C:1].[O:2]")
+    right = rule_query_cgr("[C:7]-[O:9]>>[C:7].[O:9]")
+
+    assert query_cgr_isomorphic(left, right)
 
 
 def test_expand_composite_rule_tsv_paths_accepts_directories_and_deduplicates(tmp_path):
@@ -65,6 +102,43 @@ def test_write_errors_removes_stale_file_when_run_is_clean(tmp_path):
     write_alchemical_errors(error_path, [])
 
     assert not error_path.exists()
+
+
+def test_write_alchemical_errors_uses_compact_schema(tmp_path):
+    error_path = tmp_path / "errors.tsv"
+    write_alchemical_errors(
+        error_path,
+        [
+            {
+                "source_tsv": str(tmp_path / "n1_t2_composite_rules.tsv"),
+                "row_index": 3,
+                "Target_smiles": "CCO",
+                "Composite_rule": "a$b",
+                "Composite_size": 2,
+                "Route_ids": "1,2",
+            }
+        ],
+    )
+
+    with error_path.open() as file:
+        rows = list(csv.DictReader(file, delimiter="\t"))
+
+    assert list(rows[0]) == [
+        "row_index",
+        "Target_smiles",
+        "Composite_rule",
+        "source_tsv",
+        "Composite_size",
+        "Route_ids",
+    ]
+    assert rows[0] == {
+        "row_index": "3",
+        "Target_smiles": "CCO",
+        "Composite_rule": "a$b",
+        "source_tsv": "n1_t2",
+        "Composite_size": "2",
+        "Route_ids": "1,2",
+    }
 
 
 def test_resolve_alchemical_output_paths_accepts_output_directory(tmp_path):
@@ -138,6 +212,99 @@ def test_write_alchemical_outputs(tmp_path):
         rows = list(csv.DictReader(file, delimiter="\t"))
 
     assert rows[0]["Alchemical_rule"] == "[C:1]-[O:2]>>[C:1].[O:2]"
+    assert rows[0]["output_reactants_num"] == "2"
     assert rows[0]["Reference"] == "1,2"
     assert rows[0]["Composite_rules"] == "a$b"
+    assert "Alchemical_cgr" not in rows[0]
     assert smi_path.read_text().startswith("[OH2:2]>>[CH3:1][OH:2]\tp0\ta0")
+
+
+def test_collect_alchemical_rules_merges_query_cgr_duplicates(
+    tmp_path,
+    monkeypatch,
+):
+    composite_path = tmp_path / "n1_t2_composite_rules.tsv"
+    composite_path.write_text(
+        "Composite_rule\tReference\tTarget_molecules\n"
+        "a$b\t1\tCCO\n"
+        "c$d\t2\tCCN\n",
+        encoding="utf-8",
+    )
+    rules = [
+        "[C:1]-[O:2]>>[C:1].[O:2]",
+        "[C:7]-[O:9]>>[C:7].[O:9]",
+    ]
+
+    monkeypatch.setattr(
+        "alchems.alchemical_rules.alchemical.compose_pseudo_reaction_smiles",
+        lambda target_smiles, composite_rule: f"{target_smiles}>{composite_rule}",
+    )
+
+    class FakeExtractor:
+        def __init__(self):
+            self.index = 0
+
+        def extract(self, _reaction_smiles):
+            rule = rules[self.index]
+            self.index += 1
+            return ExtractedAlchemicalRule(
+                rule_smarts=rule,
+                cgr_key=rule_cgr_key(rule),
+                query_cgr=rule_query_cgr(rule),
+            )
+
+    aggregates, pseudo_reactions, stats, errors = collect_alchemical_rules(
+        [composite_path],
+        FakeExtractor(),
+    )
+
+    assert not errors
+    assert stats.alchemical_rules_extracted == 2
+    assert len(aggregates) == 1
+    aggregate = next(iter(aggregates.values()))
+    assert aggregate.route_ids == {"1", "2"}
+    assert aggregate.target_molecules == {"CCO", "CCN"}
+    assert {record.alchemical_cgr for record in pseudo_reactions} == {
+        aggregate.cgr_key
+    }
+
+
+def test_collect_alchemical_rules_writes_skipped_unwrap_context(
+    tmp_path,
+    monkeypatch,
+):
+    from alchems.composite_rules.unwrap import RuleApplicationError
+
+    composite_path = tmp_path / "n1_t2_composite_rules.tsv"
+    composite_path.write_text(
+        "Composite_rule\tReference\tTarget_molecules\n"
+        "a$b\t1,2\tCCO\n",
+        encoding="utf-8",
+    )
+
+    def fail_unwrap(_target_smiles, _composite_rule):
+        raise RuleApplicationError("rule did not match active molecule")
+
+    monkeypatch.setattr(
+        "alchems.alchemical_rules.alchemical.compose_pseudo_reaction_smiles",
+        fail_unwrap,
+    )
+
+    aggregates, pseudo_reactions, stats, errors = collect_alchemical_rules(
+        [composite_path],
+        object(),
+    )
+
+    assert not aggregates
+    assert not pseudo_reactions
+    assert stats.skipped_unwrap_applications == 1
+    assert errors == [
+        {
+            "source_tsv": str(composite_path),
+            "row_index": 0,
+            "Target_smiles": "CCO",
+            "Composite_rule": "a$b",
+            "Composite_size": 2,
+            "Route_ids": "1,2",
+        }
+    ]

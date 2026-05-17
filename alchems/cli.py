@@ -51,6 +51,17 @@ def add_composite_extraction_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--min-length", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=5)
+    parser.add_argument(
+        "--routes-without-composites-output",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path for routes that were processed successfully but "
+            "did not produce any composite rules, as a get_route_svg_from_json-"
+            "readable JSON lookup. Defaults to "
+            "<output-prefix>_routes_without_composite_rules.json."
+        ),
+    )
     parser.add_argument("--ignore-errors", action="store_true")
     parser.add_argument("--progress-interval", type=int, default=250)
 
@@ -140,6 +151,17 @@ def add_scoring_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         dest="reference_routes_json",
         help="Reference route JSON. Composite rules are extracted from this file.",
+    )
+    parser.add_argument(
+        "--classification-tsv",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional classified alchemical rule TSV files or directories. "
+            "Their Composite_rules links are used to compute pos_overlap and "
+            "neg_overlap."
+        ),
     )
     parser.add_argument("--output", type=Path, required=True)
     add_rule_extraction_arguments(parser)

@@ -85,13 +85,11 @@ def classify_alchemical_rules(
     negative_rows = []
     for row in input_rows:
         rows_seen += 1
-        cgr_key = row.get("Alchemical_cgr", "").strip()
         try:
-            if not cgr_key:
-                cgr_key = rule_cgr_key(row[alchemical_column])
+            cgr_key = rule_cgr_key(row[alchemical_column])
         except Exception:
             cgr_errors += 1
-            cgr_key = ""
+            cgr_key = row.get("Alchemical_cgr", "").strip()
 
         matches = default_cgrs.get(cgr_key, []) if cgr_key else []
         if matches:

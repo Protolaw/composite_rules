@@ -48,6 +48,21 @@ class CompositeRuleSet:
         return sum(self.popularity_by_rule.values())
 
 
+@dataclass
+class CompositeRuleClassificationSet:
+    source: str
+    positive_weight_by_rule: dict[str, int]
+    negative_weight_by_rule: dict[str, int]
+    rows_seen: int = 0
+    parse_errors: int = 0
+
+    def weights(self, rule: str) -> tuple[int, int]:
+        return (
+            self.positive_weight_by_rule.get(rule, 0),
+            self.negative_weight_by_rule.get(rule, 0),
+        )
+
+
 def ratio(numerator: int | float, denominator: int | float) -> float:
     if denominator == 0:
         return 0.0
@@ -68,6 +83,102 @@ def popularity_from_row(row: dict[str, str]) -> int:
             return int(value)
     references = split_cell(row.get("Reference"))
     return max(len(references), 1)
+
+
+def split_composite_rules_cell(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(" || ") if part.strip()]
+
+
+def classification_from_row(row: dict[str, str], path: Path) -> str | None:
+    value = row.get("classification", "").strip().lower()
+    if value in {"positive", "pos"}:
+        return "positive"
+    if value in {"negative", "neg"}:
+        return "negative"
+
+    stem = path.stem.lower()
+    if stem.endswith("_pos") or stem.endswith("_positive"):
+        return "positive"
+    if stem.endswith("_neg") or stem.endswith("_negative"):
+        return "negative"
+    return None
+
+
+def expand_classification_tsv_paths(paths: list[Path]) -> list[Path]:
+    expanded: list[Path] = []
+    seen: set[Path] = set()
+    for raw_path in paths:
+        path = resolve_existing_path(raw_path)
+        if path.is_dir():
+            candidate_paths = sorted(
+                candidate
+                for candidate in path.glob("*_classified_alchemical_rules.tsv")
+                if not candidate.stem.endswith(("_pos", "_neg"))
+            )
+            if not candidate_paths:
+                candidate_paths = sorted(path.glob("*.tsv"))
+        else:
+            candidate_paths = [path]
+
+        for candidate in candidate_paths:
+            key = candidate.resolve() if candidate.exists() else candidate
+            if key not in seen:
+                seen.add(key)
+                expanded.append(candidate)
+    return expanded
+
+
+def empty_classification_set() -> CompositeRuleClassificationSet:
+    return CompositeRuleClassificationSet(
+        source="",
+        positive_weight_by_rule={},
+        negative_weight_by_rule={},
+    )
+
+
+def load_composite_rule_classifications(
+    paths: list[Path] | None,
+) -> CompositeRuleClassificationSet:
+    if not paths:
+        return empty_classification_set()
+
+    positive_weight_by_rule: dict[str, int] = defaultdict(int)
+    negative_weight_by_rule: dict[str, int] = defaultdict(int)
+    rows_seen = 0
+    parse_errors = 0
+    resolved_paths = expand_classification_tsv_paths(paths)
+
+    for path in resolved_paths:
+        fieldnames, rows = read_tsv_rows(path)
+        if "Composite_rules" not in fieldnames:
+            raise ValueError(f"{path} has no Composite_rules column")
+        for row in rows:
+            rows_seen += 1
+            classification = classification_from_row(row, path)
+            if classification is None:
+                parse_errors += 1
+                continue
+            weight = popularity_from_row(row)
+            for raw_rule in split_composite_rules_cell(row.get("Composite_rules")):
+                try:
+                    rule = normalize_composite_rule(raw_rule)
+                except ValueError:
+                    parse_errors += 1
+                    continue
+                if classification == "positive":
+                    positive_weight_by_rule[rule] += weight
+                else:
+                    negative_weight_by_rule[rule] += weight
+
+    return CompositeRuleClassificationSet(
+        source=",".join(str(path) for path in resolved_paths),
+        positive_weight_by_rule=dict(positive_weight_by_rule),
+        negative_weight_by_rule=dict(negative_weight_by_rule),
+        rows_seen=rows_seen,
+        parse_errors=parse_errors,
+    )
 
 
 def load_extracted_composite_rule_set(paths: list[Path]) -> CompositeRuleSet:
@@ -174,18 +285,57 @@ def reference_composite_rules_from_routes(
 def overlap_score_row(
     extracted: CompositeRuleSet,
     reference: CompositeRuleSet,
+    classifications: CompositeRuleClassificationSet | None = None,
 ) -> dict[str, Any]:
     overlap = extracted.rules & reference.rules
     union = extracted.rules | reference.rules
     overlapping_popularity = sum(extracted.popularity_by_rule[rule] for rule in overlap)
+    classifications = classifications or empty_classification_set()
+
+    positive_overlap_popularity = 0.0
+    negative_overlap_popularity = 0.0
+    classified_overlap_rules = 0
+    positive_overlap_rules = 0
+    negative_overlap_rules = 0
+    mixed_overlap_rules = 0
+    for rule in overlap:
+        positive_weight, negative_weight = classifications.weights(rule)
+        classification_weight = positive_weight + negative_weight
+        if classification_weight == 0:
+            continue
+
+        classified_overlap_rules += 1
+        if positive_weight:
+            positive_overlap_rules += 1
+        if negative_weight:
+            negative_overlap_rules += 1
+        if positive_weight and negative_weight:
+            mixed_overlap_rules += 1
+
+        extracted_popularity = extracted.popularity_by_rule[rule]
+        positive_overlap_popularity += extracted_popularity * ratio(
+            positive_weight,
+            classification_weight,
+        )
+        negative_overlap_popularity += extracted_popularity * ratio(
+            negative_weight,
+            classification_weight,
+        )
+
     return {
         "extracted_tsv": extracted.source,
         "reference_routes_json": reference.source,
+        "classification_tsv": classifications.source,
         "extracted_rows": extracted.rows_seen,
         "reference_routes": reference.rows_seen,
+        "classification_rows": classifications.rows_seen,
         "extracted_unique_composite_rules": len(extracted.rules),
         "reference_unique_composite_rules": len(reference.rules),
         "overlap_unique_composite_rules": len(overlap),
+        "classified_overlap_unique_composite_rules": classified_overlap_rules,
+        "positive_overlap_unique_composite_rules": positive_overlap_rules,
+        "negative_overlap_unique_composite_rules": negative_overlap_rules,
+        "mixed_classification_overlap_unique_composite_rules": mixed_overlap_rules,
         "extracted_overlap_ratio": ratio(len(overlap), len(extracted.rules)),
         "reference_coverage_ratio": ratio(len(overlap), len(reference.rules)),
         "jaccard": ratio(len(overlap), len(union)),
@@ -195,25 +345,59 @@ def overlap_score_row(
             overlapping_popularity,
             extracted.total_popularity,
         ),
+        "positive_overlapping_popularity": positive_overlap_popularity,
+        "negative_overlapping_popularity": negative_overlap_popularity,
+        "pos_overlap": ratio(
+            positive_overlap_popularity,
+            extracted.total_popularity,
+        ),
+        "neg_overlap": ratio(
+            negative_overlap_popularity,
+            extracted.total_popularity,
+        ),
         "extracted_parse_errors": extracted.parse_errors,
         "reference_errors": reference.parse_errors,
+        "classification_parse_errors": classifications.parse_errors,
     }
 
 
 def matched_rule_rows(
     extracted: CompositeRuleSet,
     reference: CompositeRuleSet,
+    classifications: CompositeRuleClassificationSet | None = None,
 ) -> list[dict[str, Any]]:
     rows = []
+    classifications = classifications or empty_classification_set()
     for rule in sorted(
         extracted.rules,
         key=lambda item: (-extracted.popularity_by_rule[item], item),
     ):
         reference_ids = sorted(reference.references_by_rule.get(rule, set()))
+        positive_weight, negative_weight = classifications.weights(rule)
+        classification_weight = positive_weight + negative_weight
+        if positive_weight and negative_weight:
+            classification = "mixed"
+        elif positive_weight:
+            classification = "positive"
+        elif negative_weight:
+            classification = "negative"
+        else:
+            classification = "unclassified"
         rows.append(
             {
                 "Composite_rule": rule,
                 "present_in_reference": bool(reference_ids),
+                "classification": classification,
+                "classification_positive_weight": positive_weight,
+                "classification_negative_weight": negative_weight,
+                "classification_positive_share": ratio(
+                    positive_weight,
+                    classification_weight,
+                ),
+                "classification_negative_share": ratio(
+                    negative_weight,
+                    classification_weight,
+                ),
                 "extracted_popularity": extracted.popularity_by_rule[rule],
                 "extracted_reference_ids": ",".join(
                     sorted(extracted.references_by_rule.get(rule, set()))
@@ -250,8 +434,10 @@ def score_composite_rule_overlap(
     limit: int | None = None,
     ignore_errors: bool = False,
     progress_interval: int = 250,
+    classification_tsvs: list[Path] | None = None,
 ) -> dict[str, Any]:
     extracted = load_extracted_composite_rule_set(extracted_tsvs)
+    classifications = load_composite_rule_classifications(classification_tsvs)
     reference, reference_stats, errors = reference_composite_rules_from_routes(
         reference_routes_json,
         rule_extractor,
@@ -261,40 +447,63 @@ def score_composite_rule_overlap(
         ignore_errors=ignore_errors,
         progress_interval=progress_interval,
     )
-    score_row = overlap_score_row(extracted, reference)
+    score_row = overlap_score_row(extracted, reference, classifications)
     score_path, matches_path, summary_path = output_paths(output)
 
     score_fieldnames = [
         "extracted_tsv",
         "reference_routes_json",
+        "classification_tsv",
         "extracted_rows",
         "reference_routes",
+        "classification_rows",
         "extracted_unique_composite_rules",
         "reference_unique_composite_rules",
         "overlap_unique_composite_rules",
+        "classified_overlap_unique_composite_rules",
+        "positive_overlap_unique_composite_rules",
+        "negative_overlap_unique_composite_rules",
+        "mixed_classification_overlap_unique_composite_rules",
         "extracted_overlap_ratio",
         "reference_coverage_ratio",
         "jaccard",
         "extracted_popularity",
         "overlapping_popularity",
         "popularity_overlap_ratio",
+        "positive_overlapping_popularity",
+        "negative_overlapping_popularity",
+        "pos_overlap",
+        "neg_overlap",
         "extracted_parse_errors",
         "reference_errors",
+        "classification_parse_errors",
     ]
     write_tsv(score_path, score_fieldnames, [score_row])
 
     match_fieldnames = [
         "Composite_rule",
         "present_in_reference",
+        "classification",
+        "classification_positive_weight",
+        "classification_negative_weight",
+        "classification_positive_share",
+        "classification_negative_share",
         "extracted_popularity",
         "extracted_reference_ids",
         "reference_route_ids",
     ]
-    write_tsv(matches_path, match_fieldnames, matched_rule_rows(extracted, reference))
+    write_tsv(
+        matches_path,
+        match_fieldnames,
+        matched_rule_rows(extracted, reference, classifications),
+    )
 
     summary = {
         "extracted_tsvs": [str(resolve_existing_path(path)) for path in extracted_tsvs],
         "reference_routes_json": str(resolve_existing_path(reference_routes_json)),
+        "classification_tsvs": [
+            str(resolve_existing_path(path)) for path in classification_tsvs or []
+        ],
         "output": str(score_path),
         "matches_output": str(matches_path),
         "summary_file": str(summary_path),
@@ -332,6 +541,11 @@ def run(args: Any) -> int:
         limit=args.limit,
         ignore_errors=args.ignore_errors,
         progress_interval=args.progress_interval,
+        classification_tsvs=(
+            [resolve_existing_path(path) for path in args.classification_tsv]
+            if args.classification_tsv
+            else None
+        ),
     )
     print(json.dumps(summary, indent=2), flush=True)
     return 0

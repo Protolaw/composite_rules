@@ -20,7 +20,10 @@ def route_smi_2_cgr(pathway, reverse=False): # True for AiZynthFInder, False for
         product = smiles_chython(reaction_str[1])
         for reactant_smiles in reaction_str[0]:
             reactant = smiles_chython(reactant_smiles)
-            reactant.kekule()
+            try:
+                reactant.kekule()
+            except:
+                pass
             reactant.implicify_hydrogens()
             reactant.thiele()
             reactants.append(reactant)

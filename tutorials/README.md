@@ -91,8 +91,10 @@ PYTHONPATH=composite_rules \
 conda run -n synplan python -m alchems.cli score-composite-overlap \
   --extracted-tsv composite_rules/comp_output/n1 \
   --reference-routes-json PaRoutes/data/n1-routes.json \
+  --classification-tsv /private/tmp/n1_classified_alchemical_rules.tsv \
   --output /private/tmp/composite_rule_overlap_scores
 ```
 
 The scoring output reports unique-rule overlap, reference coverage, Jaccard,
-and popularity-weighted extracted overlap.
+popularity-weighted extracted overlap, and optional classification-aware
+`pos_overlap`/`neg_overlap` reward and penalty ratios.

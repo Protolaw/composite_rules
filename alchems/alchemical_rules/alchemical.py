@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -35,6 +34,7 @@ from alchems.io import (
 class ExtractedAlchemicalRule:
     rule_smarts: str
     cgr_key: str
+    query_cgr: Any
 
 
 @dataclass
@@ -54,6 +54,7 @@ class PseudoReactionRecord:
 class AlchemicalRuleAggregate:
     rule_smarts: str
     cgr_key: str
+    query_cgr: Any | None = None
     route_ids: set[str] = field(default_factory=set)
     target_molecules: set[str] = field(default_factory=set)
     composite_rules: set[str] = field(default_factory=set)
@@ -146,20 +147,181 @@ def normalize_pseudo_reaction_mapping(
     return normalized_reactants, product
 
 
-def rule_cgr_key(rule_smarts: str) -> str:
+def rule_query_cgr(rule_smarts: str) -> Any:
     from chython import smarts
     from chython.containers.reaction import ReactionContainer
     from chython.reactor import Reactor
 
     try:
-        return str(~smarts(rule_smarts))
+        return smarts(rule_smarts).compose()
     except Exception:
         reactor = Reactor.from_smarts(rule_smarts, delete_atoms=False)
         reaction = ReactionContainer(
             reactor.__dict__["_patterns"],
             reactor.__dict__["_products"],
         )
-        return str(~reaction)
+        return reaction.compose()
+
+
+def rule_cgr_key(rule_smarts: str) -> str:
+    return json.dumps(
+        query_cgr_coarse_signature(rule_query_cgr(rule_smarts)),
+        sort_keys=True,
+        default=repr,
+    )
+
+
+def freeze_query_value(value: Any) -> Any:
+    if isinstance(value, (tuple, list)):
+        return tuple(freeze_query_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(freeze_query_value(item) for item in value))
+    if isinstance(value, (int, float, str, bool, type(None))):
+        return value
+    return repr(value)
+
+
+def query_atom_signature(atom: Any) -> tuple[Any, ...]:
+    return (
+        atom.atomic_number,
+        repr(freeze_query_value(atom.charge)),
+        repr(freeze_query_value(atom.p_charge)),
+        repr(freeze_query_value(atom.is_radical)),
+        repr(freeze_query_value(atom.p_is_radical)),
+        repr(freeze_query_value(atom.neighbors)),
+        repr(freeze_query_value(atom.p_neighbors)),
+        repr(freeze_query_value(atom.hybridization)),
+        repr(freeze_query_value(atom.p_hybridization)),
+        repr(freeze_query_value(atom.isotope)),
+    )
+
+
+def query_bond_signature(bond: Any) -> tuple[Any, ...]:
+    return (
+        repr(freeze_query_value(bond.order)),
+        repr(freeze_query_value(bond.p_order)),
+    )
+
+
+def query_cgr_adjacency(query_cgr: Any) -> dict[int, dict[int, tuple[Any, ...]]]:
+    adjacency = {atom_number: {} for atom_number, _atom in query_cgr.atoms()}
+    for atom_1, atom_2, bond in query_cgr.bonds():
+        signature = query_bond_signature(bond)
+        adjacency[atom_1][atom_2] = signature
+        adjacency[atom_2][atom_1] = signature
+    return adjacency
+
+
+def query_cgr_coarse_signature(query_cgr: Any) -> tuple[Any, ...]:
+    atom_signatures = {
+        atom_number: query_atom_signature(atom)
+        for atom_number, atom in query_cgr.atoms()
+    }
+    bond_signatures = []
+    for atom_1, atom_2, bond in query_cgr.bonds():
+        endpoints = sorted((atom_signatures[atom_1], atom_signatures[atom_2]))
+        bond_signatures.append((tuple(endpoints), query_bond_signature(bond)))
+    return (
+        tuple(sorted(atom_signatures.values())),
+        tuple(sorted(bond_signatures)),
+    )
+
+
+def query_cgr_isomorphic(left: Any, right: Any) -> bool:
+    if left.atoms_count != right.atoms_count:
+        return False
+    if left.bonds_count != right.bonds_count:
+        return False
+
+    left_atoms = {
+        atom_number: query_atom_signature(atom) for atom_number, atom in left.atoms()
+    }
+    right_atoms = {
+        atom_number: query_atom_signature(atom) for atom_number, atom in right.atoms()
+    }
+    left_adjacency = query_cgr_adjacency(left)
+    right_adjacency = query_cgr_adjacency(right)
+
+    candidates = {
+        left_atom: [
+            right_atom
+            for right_atom, right_signature in right_atoms.items()
+            if right_signature == left_signature
+            and len(right_adjacency[right_atom]) == len(left_adjacency[left_atom])
+        ]
+        for left_atom, left_signature in left_atoms.items()
+    }
+    if any(not atom_candidates for atom_candidates in candidates.values()):
+        return False
+
+    order = sorted(
+        left_atoms,
+        key=lambda atom_number: (
+            len(candidates[atom_number]),
+            -len(left_adjacency[atom_number]),
+        ),
+    )
+    mapping: dict[int, int] = {}
+    used_right_atoms: set[int] = set()
+
+    def mapping_is_consistent(left_atom: int, right_atom: int) -> bool:
+        for mapped_left_atom, mapped_right_atom in mapping.items():
+            left_bond = left_adjacency[left_atom].get(mapped_left_atom)
+            right_bond = right_adjacency[right_atom].get(mapped_right_atom)
+            if (left_bond is None) != (right_bond is None):
+                return False
+            if left_bond is not None and left_bond != right_bond:
+                return False
+        return True
+
+    def search(index: int) -> bool:
+        if index == len(order):
+            return True
+        left_atom = order[index]
+        for right_atom in candidates[left_atom]:
+            if right_atom in used_right_atoms:
+                continue
+            if not mapping_is_consistent(left_atom, right_atom):
+                continue
+            mapping[left_atom] = right_atom
+            used_right_atoms.add(right_atom)
+            if search(index + 1):
+                return True
+            used_right_atoms.remove(right_atom)
+            del mapping[left_atom]
+        return False
+
+    return search(0)
+
+
+def matching_aggregate(
+    aggregate_buckets: dict[tuple[Any, ...], list[AlchemicalRuleAggregate]],
+    query_cgr: Any,
+) -> AlchemicalRuleAggregate | None:
+    for aggregate in aggregate_buckets.get(query_cgr_coarse_signature(query_cgr), []):
+        if aggregate.query_cgr is not None and query_cgr_isomorphic(
+            aggregate.query_cgr,
+            query_cgr,
+        ):
+            return aggregate
+    return None
+
+
+def collection_error_row(
+    application: Any,
+    *,
+    stage: str,
+    exc: Exception,
+    alchemical_rule: str = "",
+) -> dict[str, Any]:
+    return {
+        "source_tsv": str(application.source_tsv),
+        "row_index": application.row_index,
+        "Target_smiles": application.target_smiles,
+        "Composite_rule": application.composite_rule,
+        "Composite_size": application.composite_size,
+        "Route_ids": ",".join(application.route_ids),
+    }
 
 
 class AlchemicalRuleExtractor:
@@ -209,9 +371,11 @@ class AlchemicalRuleExtractor:
             raise ValueError(f"expected one alchemical rule, got {len(rules)}")
 
         rule = rules[0]
+        query_cgr = rule.compose()
         extracted = ExtractedAlchemicalRule(
             rule_smarts=_rule_to_reactor_smarts(rule),
-            cgr_key=str(~rule),
+            cgr_key=str(query_cgr),
+            query_cgr=query_cgr,
         )
         self.cache[reaction_smiles] = extracted
         return extracted
@@ -232,6 +396,7 @@ def collect_alchemical_rules(
     list[dict[str, Any]],
 ]:
     aggregates: dict[str, AlchemicalRuleAggregate] = {}
+    aggregate_buckets: dict[tuple[Any, ...], list[AlchemicalRuleAggregate]] = {}
     pseudo_reactions: list[PseudoReactionRecord] = []
     errors: list[dict[str, Any]] = []
     stats = AlchemicalCollectionStats()
@@ -265,11 +430,24 @@ def collect_alchemical_rules(
                 continue
             stats.alchemical_rules_extracted += 1
 
+            aggregate = matching_aggregate(aggregate_buckets, extracted.query_cgr)
+            if aggregate is None:
+                aggregate = AlchemicalRuleAggregate(
+                    rule_smarts=extracted.rule_smarts,
+                    cgr_key=extracted.cgr_key,
+                    query_cgr=extracted.query_cgr,
+                )
+                aggregates[aggregate.cgr_key] = aggregate
+                aggregate_buckets.setdefault(
+                    query_cgr_coarse_signature(extracted.query_cgr),
+                    [],
+                ).append(aggregate)
+
             pseudo_reaction_id = f"p{len(pseudo_reactions)}"
             pseudo_reactions.append(
                 PseudoReactionRecord(
                     pseudo_reaction_id=pseudo_reaction_id,
-                    alchemical_cgr=extracted.cgr_key,
+                    alchemical_cgr=aggregate.cgr_key,
                     reaction_smiles=pseudo_reaction_smiles,
                     source_tsv=str(application.source_tsv),
                     source_row=application.row_index,
@@ -279,14 +457,6 @@ def collect_alchemical_rules(
                     composite_rule=application.composite_rule,
                 )
             )
-
-            aggregate = aggregates.get(extracted.cgr_key)
-            if aggregate is None:
-                aggregate = AlchemicalRuleAggregate(
-                    rule_smarts=extracted.rule_smarts,
-                    cgr_key=extracted.cgr_key,
-                )
-                aggregates[extracted.cgr_key] = aggregate
 
             aggregate.route_ids.update(application.route_ids)
             aggregate.target_molecules.add(application.target_smiles)
@@ -299,21 +469,20 @@ def collect_alchemical_rules(
         except Exception as exc:
             if isinstance(exc, RuleApplicationError):
                 stats.skipped_unwrap_applications += 1
+                errors.append(
+                    collection_error_row(
+                        application,
+                        stage="skipped_unwrap",
+                        exc=exc,
+                    )
+                )
                 continue
             if is_standardization_error(exc):
                 stats.skipped_rule_extraction_errors += 1
                 continue
 
             stats.errors += 1
-            errors.append(
-                {
-                    "source_tsv": str(application.source_tsv),
-                    "row_index": application.row_index,
-                    "target_smiles": application.target_smiles,
-                    "error_type": type(exc).__qualname__,
-                    "message": str(exc) or traceback.format_exc(limit=1).strip(),
-                }
-            )
+            errors.append(collection_error_row(application, stage="error", exc=exc))
             if not ignore_errors:
                 raise
 
@@ -375,4 +544,3 @@ def run(args: argparse.Namespace) -> int:
     write_json(summary_path, summary)
     print(json.dumps(summary, indent=2), flush=True)
     return 0
-

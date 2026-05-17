@@ -236,10 +236,30 @@ def composite_summary_path_from_output(output: Path) -> Path:
     return prefix.with_name(f"{base_name}_composite_rule_extraction_summary.json")
 
 
+def composite_routes_without_rules_path_from_output(output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    prefix = output.with_suffix("")
+    base_name = re.sub(r"(?:_t\d+)?_composite_rules$", "", prefix.name)
+    return prefix.with_name(f"{base_name}_routes_without_composite_rules.json")
+
+
 def write_composite_summary(output: Path, summary: dict[str, Any]) -> Path:
     path = composite_summary_path_from_output(output)
     write_json(path, summary)
     return path
+
+
+def write_composite_routes_without_rules(
+    output: Path,
+    routes: dict[Any, dict[str, Any]],
+    path: Path | None = None,
+) -> Path:
+    no_rules_path = path or composite_routes_without_rules_path_from_output(output)
+    write_json(
+        no_rules_path,
+        {str(route_id): route for route_id, route in routes.items()},
+    )
+    return no_rules_path
 
 
 def write_composite_errors(output: Path, errors: list[dict[str, Any]]) -> None:
@@ -429,12 +449,22 @@ def sorted_aggregates(aggregates: dict[str, Any]) -> list[Any]:
     )
 
 
+def reaction_output_reactants_num(rule_smarts: str) -> int:
+    """Return number of dot-separated molecules on the right side of a rule."""
+
+    _left, separator, right = rule_smarts.partition(">>")
+    if not separator:
+        return 0
+    return len([part for part in right.split(".") if part.strip()])
+
+
 def write_alchemical_rules_tsv(
     output: Path,
     aggregates: dict[str, Any],
 ) -> dict[str, int]:
     fieldnames = [
         "Alchemical_rule",
+        "output_reactants_num",
         "popularity",
         "route_ids_size",
         "Reference",
@@ -445,7 +475,6 @@ def write_alchemical_rules_tsv(
         "Source_composite_rows",
         "pseudo_reactions_size",
         "Pseudo_reaction_ids",
-        "Alchemical_cgr",
     ]
     rows = []
     for aggregate in sorted_aggregates(aggregates):
@@ -453,6 +482,9 @@ def write_alchemical_rules_tsv(
         rows.append(
             {
                 "Alchemical_rule": aggregate.rule_smarts,
+                "output_reactants_num": reaction_output_reactants_num(
+                    aggregate.rule_smarts
+                ),
                 "popularity": len(route_ids),
                 "route_ids_size": len(route_ids),
                 "Reference": ",".join(route_ids),
@@ -465,7 +497,6 @@ def write_alchemical_rules_tsv(
                 "Source_composite_rows": ",".join(sorted(aggregate.source_rows)),
                 "pseudo_reactions_size": len(aggregate.pseudo_reaction_ids),
                 "Pseudo_reaction_ids": ",".join(aggregate.pseudo_reaction_ids),
-                "Alchemical_cgr": aggregate.cgr_key,
             }
         )
     write_tsv(output, fieldnames, rows)
@@ -506,10 +537,34 @@ def write_alchemical_errors(path: Path, errors: list[dict[str, Any]]) -> None:
             path.unlink()
         return
     fieldnames = [
-        "source_tsv",
         "row_index",
-        "target_smiles",
-        "error_type",
-        "message",
+        "Target_smiles",
+        "Composite_rule",
+        "source_tsv",
+        "Composite_size",
+        "Route_ids",
     ]
-    write_tsv(path, fieldnames, errors)
+    write_tsv(
+        path,
+        fieldnames,
+        (alchemical_error_row_for_output(row) for row in errors),
+    )
+
+
+def source_tsv_prefix(path: str | Path) -> str:
+    stem = Path(path).stem
+    return re.sub(r"_composite_rules$", "", stem)
+
+
+def alchemical_error_row_for_output(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "row_index": row.get("row_index", ""),
+        "Target_smiles": row.get("Target_smiles")
+        or row.get("target_smiles")
+        or row.get("Target_molecules", ""),
+        "Composite_rule": row.get("Composite_rule", ""),
+        "source_tsv": source_tsv_prefix(row.get("source_tsv", "")),
+        "Composite_size": row.get("Composite_size")
+        or row.get("composite_size", ""),
+        "Route_ids": row.get("Route_ids") or row.get("route_ids", ""),
+    }
