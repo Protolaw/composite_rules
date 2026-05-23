@@ -5,8 +5,36 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "route-inspector"
 version = "0.1.0"
-description = "Inspect SynPlanner/chython route rules, alchemical rules, scoring, and protection strategies."
+description = "Route-level rule mining, alchemical rule extraction, scoring, and protection-strategy analysis for SynPlanner/chython retrosynthesis routes."
+readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Almaz Gilmullin" }]
+keywords = [
+  "cheminformatics",
+  "retrosynthesis",
+  "synthesis-planning",
+  "reaction-informatics",
+  "synplanner",
+  "chython",
+  "chemical-reactions",
+  "route-analysis",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[project.urls]
+Homepage = "https://github.com/Protolaw/route-inspector"
+Repository = "https://github.com/Protolaw/route-inspector"
+Issues = "https://github.com/Protolaw/route-inspector/issues"
+Documentation = "https://github.com/Protolaw/route-inspector/tree/main/docs"
 
 [project.scripts]
 route-inspector = "route_analysis.cli:main"

@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520" role="img" aria-labelledby="title desc">
+  <title id="title">Route Inspector workflow</title>
+  <desc id="desc">A workflow diagram showing PaRoutes or SynPlanner route JSON entering Route Inspector, which outputs composite rules, alchemical rules, SVG unwrapping, overlap scoring, and protection analysis.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fbff"/>
+      <stop offset="100%" stop-color="#eef5ff"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#172554"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1e3a8a" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .label { font: 700 28px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .sub { font: 500 17px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .small { font: 600 14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .chip { font: 700 14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1e3a8a; }
+      .white { fill: #ffffff; }
+      .line { stroke: #60a5fa; stroke-width: 4; stroke-linecap: round; }
+      .dash { stroke: #bfdbfe; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 8 8; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#60a5fa"/>
+    </marker>
+  </defs>
+
+  <rect width="1100" height="520" rx="32" fill="url(#bg)"/>
+
+  <g transform="translate(60 50)">
+    <text class="label" x="0" y="0">Route Inspector</text>
+    <text class="sub" x="0" y="34">Find multi-step chemistry motifs in retrosynthetic route trees</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="150" width="220" height="190" rx="28" fill="#ffffff"/>
+    <text class="chip" x="105" y="195">INPUT</text>
+    <text class="label" x="105" y="232" font-size="24">Route JSON</text>
+    <text class="sub" x="105" y="264">PaRoutes-style</text>
+    <text class="sub" x="105" y="290">mol / reaction trees</text>
+    <path d="M110 314 C135 286, 166 286, 190 314 C216 342, 245 342, 262 314" fill="none" stroke="#93c5fd" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <path class="line" marker-end="url(#arrow)" d="M305 245 L405 245"/>
+
+  <g filter="url(#shadow)">
+    <rect x="420" y="125" width="260" height="240" rx="34" fill="url(#core)"/>
+    <text x="463" y="180" font-family="Inter, ui-sans-serif, system-ui" font-size="28" font-weight="800" fill="#ffffff">Inspect routes</text>
+    <text x="463" y="218" font-family="Inter, ui-sans-serif, system-ui" font-size="17" font-weight="500" fill="#dbeafe">extract • unwrap • score</text>
+    <text x="463" y="246" font-family="Inter, ui-sans-serif, system-ui" font-size="17" font-weight="500" fill="#dbeafe">classify • trace</text>
+
+    <circle cx="486" cy="300" r="15" fill="#bfdbfe"/>
+    <circle cx="550" cy="278" r="15" fill="#bfdbfe"/>
+    <circle cx="614" cy="300" r="15" fill="#bfdbfe"/>
+    <path d="M501 296 L535 283 M565 283 L599 296" stroke="#bfdbfe" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <path class="line" marker-end="url(#arrow)" d="M695 245 L790 245"/>
+
+  <g filter="url(#shadow)">
+    <rect x="810" y="95" width="230" height="78" rx="22" fill="#ffffff"/>
+    <text class="small" x="838" y="128">COMPOSITE RULES</text>
+    <text class="sub" x="838" y="153">contiguous route motifs</text>
+
+    <rect x="810" y="190" width="230" height="78" rx="22" fill="#ffffff"/>
+    <text class="small" x="838" y="223">ALCHEMICAL RULES</text>
+    <text class="sub" x="838" y="248">pseudo-reactions</text>
+
+    <rect x="810" y="285" width="230" height="78" rx="22" fill="#ffffff"/>
+    <text class="small" x="838" y="318">SVG / JSON</text>
+    <text class="sub" x="838" y="343">inspectable routes</text>
+
+    <rect x="810" y="380" width="230" height="78" rx="22" fill="#ffffff"/>
+    <text class="small" x="838" y="413">SCORES + TRACES</text>
+    <text class="sub" x="838" y="438">overlap + protection</text>
+  </g>
+
+  <path class="dash" d="M680 185 C740 130, 760 130, 800 130"/>
+  <path class="dash" d="M680 225 C735 225, 758 226, 800 228"/>
+  <path class="dash" d="M680 265 C740 315, 760 322, 800 325"/>
+  <path class="dash" d="M680 304 C736 400, 760 420, 800 420"/>
+
+  <g transform="translate(70 405)">
+    <rect width="610" height="58" rx="18" fill="#dbeafe"/>
+    <text class="small" x="26" y="36">CLI-first research toolkit for SynPlanner/chython route-level analysis</text>
+  </g>
+</svg>
