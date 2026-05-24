@@ -6,6 +6,7 @@ from route_inspector.io import (
     resolve_output_path,
     stage_output_dir,
     write_manifest,
+    write_standard_sidecars,
     write_composite_routes_without_rules,
     write_composite_rules,
     write_composite_summary,
@@ -148,3 +149,18 @@ def test_write_manifest_creates_reproducibility_sidecar(tmp_path):
     assert manifest["output_directory"] == str(tmp_path)
     assert manifest["config_path"] == "configs/rules.yaml"
     assert "created_at" in manifest
+
+
+def test_write_standard_sidecars_can_skip_generic_summary(tmp_path):
+    sidecars = write_standard_sidecars(
+        tmp_path,
+        command_name="preprocess-routes",
+        summary={"ok": True},
+        errors=[],
+        write_summary=False,
+    )
+
+    assert "summary" not in sidecars
+    assert not (tmp_path / "summary.json").exists()
+    assert (tmp_path / "errors.tsv").exists()
+    assert (tmp_path / "manifest.json").exists()

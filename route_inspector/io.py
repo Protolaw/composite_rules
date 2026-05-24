@@ -332,11 +332,14 @@ def write_standard_sidecars(
     cli_args: Any | None = None,
     argv: list[str] | None = None,
     extra_manifest: dict[str, Any] | None = None,
+    write_summary: bool = True,
 ) -> dict[str, str]:
     """Write generic summary, errors, and manifest sidecars for a command."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = write_summary_sidecar(output_dir, summary)
+    summary_path = (
+        write_summary_sidecar(output_dir, summary) if write_summary else None
+    )
     errors_path = write_errors_tsv(output_dir / "errors.tsv", errors)
     manifest_path = write_manifest(
         output_dir,
@@ -348,11 +351,13 @@ def write_standard_sidecars(
         argv=argv,
         extra=extra_manifest,
     )
-    return {
-        "summary": str(summary_path),
+    sidecars = {
         "errors": str(errors_path),
         "manifest": str(manifest_path),
     }
+    if summary_path is not None:
+        sidecars["summary"] = str(summary_path)
+    return sidecars
 
 
 def resolve_file_or_dir_path(path: Path, default_filename: str) -> Path:

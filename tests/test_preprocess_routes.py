@@ -6,10 +6,12 @@ from route_inspector.preprocess_routes import (
     ReactionGranularity,
     SingleCenterRule,
     dataset_output_paths,
+    molecule_has_bond,
     preprocess_routes_file,
     preprocess_routes_json,
+    same_molecule_smiles,
 )
-from route_inspector.protection.analysis import ProtectionAnalysisConfig
+from route_inspector.protection.analysis import ProtectionAnalysisConfig, parse_molecule
 
 
 PARENT = "[CH2:1]=[O:2]"
@@ -59,6 +61,34 @@ def route_with_one_reaction():
             }
         ],
     }
+
+
+def route_from_reaction(reaction_smiles):
+    reactants, product = reaction_smiles.split(">>", 1)
+    return {
+        "smiles": product,
+        "type": "mol",
+        "in_stock": False,
+        "children": [
+            {
+                "type": "reaction",
+                "metadata": {"smiles": reaction_smiles},
+                "children": [
+                    {
+                        "smiles": reactant,
+                        "type": "mol",
+                        "in_stock": True,
+                        "children": [],
+                    }
+                    for reactant in reactants.split(".")
+                ],
+            }
+        ],
+    }
+
+
+def fail_if_unwrapped(*_args, **_kwargs):
+    raise AssertionError("semantic single-center reaction should not be split")
 
 
 def multicenter_extraction():
@@ -271,6 +301,212 @@ def test_non_protection_mapped_intermediate_fallback_splits_n_oxide_chlorination
         == "bond_forming_and_breaking"
     )
     assert change["split_method"] == "mapped_intermediate"
+    assert list(resolved) == ["0"]
+    assert unresolved == {}
+    assert summary["number_of_non_protection_multicenter_reactions_split"] == 1
+
+
+def test_boronate_workup_is_not_split_as_multicenter():
+    reaction = (
+        "[CH2:34]1[CH2:35][O:33][CH:12]([O:36]1)[c:11]2[cH:19]"
+        "[cH:20][c:8]([n:9][cH:10]2)[F:37].[CH3:43][CH:44]([CH3:45])"
+        "[O:46][B:40]([O:41][CH:50]([CH3:51])[CH3:52])[O:39]"
+        "[CH:47]([CH3:48])[CH3:49]>>[OH:39][B:40]([OH:41])[c:20]1"
+        "[c:8]([n:9][cH:10][c:11]([CH:12]2[O:33][CH2:35][CH2:34]"
+        "[O:36]2)[cH:19]1)[F:37]"
+    )
+    extraction = ReactionGranularity(
+        reaction_smiles=reaction,
+        multicenter_rule_smarts="boronate_workup",
+        single_center_rules=(
+            SingleCenterRule(
+                "alkoxy_loss",
+                frozenset({39, 47}),
+                forward_change_kind="bond_breaking",
+                forward_bonds_broken=((39, 47), (47, 48), (47, 49)),
+            ),
+            SingleCenterRule(
+                "borylation",
+                frozenset({20, 40, 46}),
+                forward_change_kind="bond_forming_and_breaking",
+                forward_bonds_formed=((20, 40),),
+                forward_bonds_broken=((40, 46), (44, 46)),
+            ),
+        ),
+        center_components=(frozenset({39, 47}), frozenset({20, 40, 46})),
+    )
+
+    cleaned, resolved, unresolved, summary = preprocess_routes_json(
+        [route_from_reaction(reaction)],
+        extractor=FakeExtractor(extraction),
+        protection_rules={},
+        protection_config=ProtectionAnalysisConfig(collect_interval_rules=False),
+        normalizer=identity_normalizer,
+        protection_detector=lambda *_args: [],
+        unwrapper=fail_if_unwrapped,
+    )
+
+    assert cleaned[0]["children"][0]["metadata"]["smiles"] == reaction
+    assert resolved == {}
+    assert unresolved == {}
+    assert summary["number_of_multicenter_reactions_found"] == 0
+    assert summary["number_of_routes_modified"] == 0
+
+
+def test_local_cascade_without_pure_breaking_is_not_split():
+    reaction = (
+        "[CH2:21]=[CH:22][C:17](=[O:43])[CH3:18].[CH3:36][C:37]"
+        "([CH3:38])([CH3:39])[O:40][C:41](=[O:34])[N:25]1[CH2:24]"
+        "[CH2:23][CH:20]([CH2:32][CH2:31]1)[CH:19]=[O:44]>>"
+        "[CH3:36][C:37]([CH3:38])([CH3:39])[O:40][C:41](=[O:34])"
+        "[N:25]1[CH2:24][CH2:23][C:20]2([CH2:32][CH2:31]1)"
+        "[CH:19]=[CH:18][C:17](=[O:43])[CH2:22][CH2:21]2"
+    )
+    extraction = ReactionGranularity(
+        reaction_smiles=reaction,
+        multicenter_rule_smarts="local_cascade",
+        single_center_rules=(
+            SingleCenterRule(
+                "enone",
+                frozenset({18, 19, 44}),
+                forward_change_kind="bond_forming_and_breaking",
+                forward_bonds_formed=((18, 19),),
+                forward_bonds_broken=((19, 44),),
+            ),
+            SingleCenterRule(
+                "cyclization",
+                frozenset({20, 21, 22}),
+                forward_change_kind="bond_forming",
+                forward_bonds_formed=((20, 21),),
+            ),
+        ),
+        center_components=(frozenset({18, 19, 44}), frozenset({20, 21, 22})),
+    )
+
+    _cleaned, resolved, unresolved, summary = preprocess_routes_json(
+        [route_from_reaction(reaction)],
+        extractor=FakeExtractor(extraction),
+        protection_rules={},
+        protection_config=ProtectionAnalysisConfig(collect_interval_rules=False),
+        normalizer=identity_normalizer,
+        protection_detector=lambda *_args: [],
+        unwrapper=fail_if_unwrapped,
+    )
+
+    assert resolved == {}
+    assert unresolved == {}
+    assert summary["number_of_multicenter_reactions_found"] == 0
+
+
+def test_acetonide_c_n_cascade_is_not_split():
+    reaction = (
+        "[CH3:33][C:34]([CH3:35])([CH3:36])[O:37][C:38](=[O:39])"
+        "[NH:16][c:17]1[c:18]([NH2:32])[cH:19][c:20]([C:21]#[C:22]"
+        "[c:23]2[cH:24][cH:25][c:26]([cH:28][cH:29]2)[F:27])[cH:30]"
+        "[cH:31]1.[CH3:41][C:42]1([CH3:43])[O:44][C:2]([CH:3]=[C:4]"
+        "([c:5]2[cH:15][cH:14][cH:13][c:7](-[n:8]3[cH:12][n:11]"
+        "[cH:10][cH:9]3)[cH:6]2)[O:40]1)=[O:1]>>[CH3:33][C:34]"
+        "([CH3:35])([CH3:36])[O:37][C:38](=[O:39])[NH:16][c:17]1"
+        "[c:18]([NH:32][C:2]([CH2:3][C:4](=[O:40])[c:5]2[cH:15]"
+        "[cH:14][cH:13][c:7]([cH:6]2)-[n:8]3[cH:12][n:11][cH:10]"
+        "[cH:9]3)=[O:1])[cH:19][c:20]([C:21]#[C:22][c:23]4[cH:24]"
+        "[cH:25][c:26]([cH:28][cH:29]4)[F:27])[cH:30][cH:31]1"
+    )
+    extraction = ReactionGranularity(
+        reaction_smiles=reaction,
+        multicenter_rule_smarts="acetonide_c_n_cascade",
+        single_center_rules=(
+            SingleCenterRule(
+                "acetonide",
+                frozenset({3, 4, 40, 42}),
+                forward_change_kind="bond_breaking",
+                forward_bonds_broken=((40, 42), (41, 42), (42, 43), (42, 44)),
+            ),
+            SingleCenterRule(
+                "c_n",
+                frozenset({2, 32, 44}),
+                forward_change_kind="bond_forming_and_breaking",
+                forward_bonds_formed=((2, 32),),
+                forward_bonds_broken=((2, 44), (42, 44)),
+            ),
+        ),
+        center_components=(frozenset({3, 4, 40, 42}), frozenset({2, 32, 44})),
+    )
+
+    _cleaned, resolved, unresolved, summary = preprocess_routes_json(
+        [route_from_reaction(reaction)],
+        extractor=FakeExtractor(extraction),
+        protection_rules={},
+        protection_config=ProtectionAnalysisConfig(collect_interval_rules=False),
+        normalizer=identity_normalizer,
+        protection_detector=lambda *_args: [],
+        unwrapper=fail_if_unwrapped,
+    )
+
+    assert resolved == {}
+    assert unresolved == {}
+    assert summary["number_of_multicenter_reactions_found"] == 0
+
+
+def test_mapped_fallback_restores_full_leaving_fragment():
+    reaction = (
+        "[CH2:35]1[CH2:34][CH2:33][CH2:32][CH:31]([n:23]2[n:22]"
+        "[cH:21][c:20]3[c:19]([n:27][cH:26][n:25][c:24]23)[Cl:30])"
+        "[O:36]1.[F:1][C:2]([F:3])([c:4]1[cH:9][cH:8][cH:7][cH:6]"
+        "[cH:5]1)[c:10]2[n:29][c:13]([o:12][n:11]2)[C@@H:14]3"
+        "[CH2:28][C@@H:17]([NH2:18])[CH2:16][CH2:15]3>>[F:1][C:2]"
+        "([F:3])([c:4]1[cH:9][cH:8][cH:7][cH:6][cH:5]1)[c:10]2"
+        "[n:29][c:13]([o:12][n:11]2)[C@H:14]3[CH2:15][CH2:16]"
+        "[C@H:17]([NH:18][c:19]4[c:20]5[c:24]([nH:23][n:22][cH:21]5)"
+        "[n:25][cH:26][n:27]4)[CH2:28]3"
+    )
+    expected_intermediate = (
+        "[F:1][C:2]([F:3])([c:4]1[cH:9][cH:8][cH:7][cH:6][cH:5]1)"
+        "[c:10]2[n:29][c:13]([o:12][n:11]2)[C@H:14]3[CH2:15]"
+        "[CH2:16][C@@H:17]([CH2:28]3)[NH:18][c:19]4[n:27][cH:26]"
+        "[n:25][c:24]5[n:23]([n:22][cH:21][c:20]45)[CH2:35]1"
+        "[CH2:34][CH2:33][CH2:32][C:31][O:36]1"
+    )
+    extraction = ReactionGranularity(
+        reaction_smiles=reaction,
+        multicenter_rule_smarts="substitution",
+        single_center_rules=(
+            SingleCenterRule(
+                "restore_fragment",
+                frozenset({23, 31}),
+                forward_change_kind="bond_breaking",
+                forward_bonds_broken=((23, 31), (31, 32), (31, 36)),
+            ),
+            SingleCenterRule(
+                "c_n",
+                frozenset({18, 19, 30}),
+                forward_change_kind="bond_forming_and_breaking",
+                forward_bonds_formed=((18, 19),),
+                forward_bonds_broken=((19, 30),),
+            ),
+        ),
+        center_components=(frozenset({23, 31}), frozenset({18, 19, 30})),
+    )
+
+    cleaned, resolved, unresolved, summary = preprocess_routes_json(
+        [route_from_reaction(reaction)],
+        extractor=FakeExtractor(extraction),
+        protection_rules={},
+        protection_config=ProtectionAnalysisConfig(collect_interval_rules=False),
+        normalizer=identity_normalizer,
+        protection_detector=lambda *_args: [],
+        unwrapper=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError()),
+        ignore_errors=True,
+    )
+
+    first_reaction = cleaned[0]["children"][0]["smiles"]
+    intermediate = first_reaction.split(">>", 1)[0]
+
+    assert same_molecule_smiles(intermediate, expected_intermediate)
+    intermediate_molecule = parse_molecule(intermediate)
+    assert molecule_has_bond(intermediate_molecule, 23, 35)
+    assert not molecule_has_bond(intermediate_molecule, 23, 31)
+    assert "([CH3:32])[OH:36]" not in intermediate
     assert list(resolved) == ["0"]
     assert unresolved == {}
     assert summary["number_of_non_protection_multicenter_reactions_split"] == 1

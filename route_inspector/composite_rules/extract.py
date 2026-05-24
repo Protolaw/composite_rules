@@ -864,10 +864,8 @@ class SynPlannerRuleExtractor:
         The helper feeds rule extraction, center-overlap filtering, or final TSV
         aggregation without changing the original route JSON in place.
         """
-        from synplan.chem.data.standardizing import RemoveReagentsStandardizer
 
         self.config = config
-        self.standardizer = RemoveReagentsStandardizer()
         self.cache: dict[str, ReactionRuleStep | None] = {}
 
     @classmethod
@@ -913,14 +911,14 @@ class SynPlannerRuleExtractor:
         )
 
         reaction = parse_smiles(reaction_smiles)
-        standardized = self.standardizer(reaction)
-        center_atoms = frozenset((~standardized).center_atoms)
+        # standardized = self.standardizer(reaction)
+        center_atoms = frozenset((~reaction).center_atoms)
         reactant_center_molecules = side_center_molecules(
-            standardized.reactants,
+            reaction.reactants,
             center_atoms,
         )
         product_center_molecules = side_center_molecules(
-            standardized.products,
+            reaction.products,
             center_atoms,
         )
         rules, skipped = extract_rules(self.config, reaction)
