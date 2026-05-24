@@ -4,6 +4,7 @@ Route Inspector Documentation
 .. toctree::
    :maxdepth: 2
 
+   preprocessing
    composite_rules
    alchemical_rules
    protection_analysis
